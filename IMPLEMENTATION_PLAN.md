@@ -9,6 +9,20 @@ A concrete, milestone-ordered plan for building the service specified in [DESIGN
 - CI runs `fmt --check`, `clippy`, `test`, `bench --no-run`, and builds the container image.
 - Every milestone ends with: code compiles, lints clean, tests pass, docs updated.
 
+## Progress
+
+Milestone-level status. Sub-items appear only where partial completion is worth calling out.
+
+- [x] **M1 — Scaffold and build-time codegen.** `Cargo.toml`, `build.rs`, LDNOOBW submodule pinned, `$OUT_DIR/generated_terms.rs` emitted, hello-world `main.rs` prints `LIST_VERSION` and per-language term counts.
+- [x] **M2 — Matching core (library).** `matcher::{normalize, boundary, scan}` in place; unit tests under `cargo test --lib`; criterion bench skeleton at `benches/matcher.rs` compiles.
+- [ ] **M3 — HTTP surface (happy path).** `config.rs`, `auth.rs`, `error.rs`, `routes/`, `model.rs`, middleware stack, `DEFAULT_MODE` table, integration tests via `Router::oneshot`.
+- [ ] **M4 — Multi-language and mode defaults.** All LDNOOBW languages loaded; `BWS_LANGS` allowlist; per-language mode defaulting end-to-end.
+- [ ] **M5 — Limits, backpressure, and error surface.** In-flight gate on `/v1/check`; every documented 4xx/5xx row reachable by a test.
+- [ ] **M6 — Observability.** `/metrics` with the DESIGN §"Metrics contract" series; `BWS_HISTOGRAM_BUCKETS`; JSON `tracing-subscriber`.
+- [ ] **M7 — Container, deploy, and config plumbing.** Distroless/static Dockerfile, `deploy/k8s/` manifests, root `Makefile`.
+- [ ] **M8 — Benchmarks and CI perf gates.** Criterion suite, CI p99 regression gate, `benches/load/` load-test script.
+- [ ] **M9 — v1.0 tag.** Reproducible `make docker`, load-test report, `v1.0.0` tag and image.
+
 ## Repository layout (target)
 
 ```
