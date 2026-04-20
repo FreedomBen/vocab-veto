@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt-clippy-test:
+    name: fmt / clippy / test / bench --no-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked
+
+      - name: cargo bench --no-run
+        run: cargo bench --no-run --locked
+
+  bench-regression:
+    name: Bench p99 regression gate (>10% fails)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: fmt-clippy-test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Run the PR workload first so target/ is populated by the branch under
+      # test, then check out the base ref into the same worktree and run
+      # against the same target/ (criterion keeps baselines separate by name).
+      - name: Bench PR
+        run: cargo bench --locked -- --save-baseline pr
+
+      - name: Check out base ref
+        run: |
+          git fetch origin "${{ github.event.pull_request.base.ref }}"
+          git checkout "origin/${{ github.event.pull_request.base.ref }}"
+          git submodule update --init --recursive
+
+      - name: Bench base
+        run: cargo bench --locked -- --save-baseline base
+
+      - name: Compare (fail on >10% regression)
+        run: python3 scripts/bench-compare.py base pr 10
