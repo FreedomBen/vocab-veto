@@ -6,6 +6,8 @@ A high-throughput, low-latency HTTP service that answers: *"Does this string con
 
 Target: p99 latency < 1 ms for a 1 KiB reference input on a single core; tens of thousands of RPS per instance. Larger inputs (up to the 64 KiB body limit; see API) scale linearly in the Aho-Corasick scan — the p99 target applies to the reference size, not the hard limit.
 
+For the milestone-ordered implementation plan, see [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md).
+
 ## Non-goals
 
 - Semantic moderation, toxicity scoring, or ML-based classification.
@@ -160,7 +162,7 @@ Error response (4xx):
 | `bws_languages_loaded`         | gauge     | —                        | Count of automatons live after startup; sanity check for `BWS_LANGS`.    |
 | `bws_inflight`                 | gauge     | —                        | Current in-flight `/v1/check` request count (counts against `BWS_MAX_INFLIGHT`). Lets dashboards answer "how close are we to the cap?" without inferring it from 503 rates. |
 
-Histogram buckets default to the `axum-prometheus` preset tuned for sub-millisecond latency; override via env for deployments with different SLO targets.
+Histogram buckets default to the `axum-prometheus` preset tuned for sub-millisecond latency; override via `BWS_HISTOGRAM_BUCKETS` (comma-separated ascending floats in seconds) for deployments with different SLO targets. The override applies to both `bws_request_duration_seconds` and `bws_match_duration_seconds`.
 
 ### Why return match spans
 
@@ -179,11 +181,12 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 
 - Single stateless binary, horizontally scalable.
 - Container image built via `cargo chef` for fast layer caching.
-- Config via env vars:
+- Config via env vars and an optional TOML file. Figment loads `/etc/bws/config.toml` first (path overridable via `BWS_CONFIG_FILE`), then env — env wins on overlap. The default TOML path being absent is not an error; a `BWS_CONFIG_FILE` pointing at a missing file **is** fatal (explicit operator intent). TOML keys are the lowercase env-var names without the `BWS_` prefix (`listen_addr`, `api_keys`, `langs`, `max_inflight`); array-valued keys are TOML arrays rather than comma-separated strings. All post-parse rules below (whitespace trim, dedup, empty-entry rejection, ASCII-lowercase, short-key warning) apply identically to both sources.
   - `BWS_LISTEN_ADDR` — HTTP listen address. Defaults to `0.0.0.0:8080` when unset.
   - `BWS_API_KEYS` — **required**, comma-separated list of accepted API keys (e.g. `k_prod_ab12…,k_prod_cd34…`). Parsing: split on `,`, trim surrounding ASCII whitespace from each entry, reject empty entries, deduplicate. Keys cannot themselves contain `,` — rotate to comma-free keys if the existing set has any. If unset, empty, or if parsing yields zero keys, the service **refuses to start** with a clear error — there is no open/anonymous mode. Keys should be ≥32 bytes of cryptographically random data; the service warns (does not reject) on shorter keys so legacy tokens can be rotated in gracefully. Rotation: redeploy with the union of old + new keys, wait for callers to cut over, then redeploy with only the new set — no hot reload.
   - `BWS_LANGS` — optional comma-separated runtime allowlist (e.g. `en,es,fr`). Defaults to every language compiled into the binary. Parsing: split on `,`, trim surrounding ASCII whitespace from each entry, ASCII-lowercase, reject empty entries, deduplicate. Useful for slimming a single fat image down to a specific deployment's needs without rebuilding. A code not compiled into the binary is a **fatal startup error** (`unknown language in BWS_LANGS: xx; compiled: ...`); silent drops would mask deploy-config typos and let a pod come up serving fewer languages than the operator intended.
   - `BWS_MAX_INFLIGHT` — optional cap on concurrent in-flight `/v1/check` requests. Default `1024`. When at capacity, new requests are rejected with **503 `overloaded`** before body parse, bounding worst-case in-flight memory to roughly `BWS_MAX_INFLIGHT × (64 KiB body + 192 KiB normalized buffer + offset map)` — NFKC compatibility expansion is capped at 3× via the normalized-length check, and requests that would exceed 192 KiB normalized are rejected with 413 before the scan runs. This is a liveness safeguard, not a rate limit; callers should retry with jitter. Excluded from the cap: `/healthz`, `/readyz`, `/metrics`, and 401-fast-path rejections (all of which do no bounded-size work).
+  - `BWS_HISTOGRAM_BUCKETS` — optional. Comma-separated ascending floats in seconds; overrides the default bucket boundaries for both `bws_request_duration_seconds` and `bws_match_duration_seconds`. Unset = `axum-prometheus` sub-millisecond preset. Parse errors are a fatal startup error.
   - *(No `BWS_DEFAULT_MODE` — mode defaulting is per-language and defined in code, not config, so behavior is identical across deployments.)*
 - **List updates ship via redeploy.** No hot reload, ever — it keeps the hot path lock-free and makes the running version trivially auditable (image tag = list version).
 
@@ -219,11 +222,3 @@ The in-process concurrency cap is a liveness safeguard, not a rate limit: it pre
 - **Multi-tenant rate limiting.** Likely belongs in the gateway, not this service — revisit if that assumption breaks.
 - **Public ingress.** v1 runs as a `ClusterIP` Service with no Ingress — in-cluster traffic only. Making the service externally reachable requires adding an Ingress or gateway with rate limiting and request-size policy in front; the API key alone is not a substitute (see Threat model).
 
-## Milestones
-
-1. Scaffold crate, vendor LDNOOBW, build-time codegen of term tables.
-2. `/v1/check` end-to-end with both `strict` and `substring` modes for `en`.
-3. All LDNOOBW languages loaded; per-language mode override.
-4. Metrics, health checks, container image.
-5. Criterion benches + CI perf gates.
-6. Load test report + v1.0 tag.
