@@ -18,7 +18,7 @@ No `Cargo.toml`, `Makefile`, `Containerfile`, or source tree exists yet. Build/t
 
 ## What this service is (big-picture)
 
-The project is named **Vocab Veto**. The repo directory and (eventual) crate name remain `banned-words-service` — the product/user-facing name is Vocab Veto; the crate/binary identity and `BWS_*` env-var prefix are unchanged.
+The project is named **Vocab Veto**. The repo directory and (eventual) crate name remain `banned-words-service` — the product/user-facing name is Vocab Veto. The env-var prefix is `VV_*` (renamed from the old `BWS_*` when the project was rebranded).
 
 A stateless, single-binary Rust HTTP service that answers *"does this string contain a banned word?"* across many languages, backed by `aho-corasick` automatons built from the LDNOOBW list. The entire list is compiled into the binary at build time; there is no hot reload, no database, no external state. The image tag is the list version.
 
@@ -36,6 +36,6 @@ If a change conflicts with any of these, update DESIGN.md in the same commit and
 ## Working conventions specific to this repo
 
 - **Do not read `TODO.md`.** It is for humans only (inherited from global instructions); agents should work from DESIGN.md and IMPLEMENTATION_PLAN.md instead.
-- **LDNOOBW is vendored via git submodule at a pinned SHA.** That SHA is the list version surfaced in `X-List-Version`, `/readyz`, and the `bws_list_version_info` metric. Bumping the SHA is a deliberate act — treat it as a release, not a routine update.
+- **LDNOOBW is vendored via git submodule at a pinned SHA.** That SHA is the list version surfaced in `X-List-Version`, `/readyz`, and the `vv_list_version_info` metric. Bumping the SHA is a deliberate act — treat it as a release, not a routine update.
 - **Docs track code.** Per the user's global rule, documentation updates land in the same commit as the code change that makes them necessary. For this repo that most often means DESIGN.md (behavior changes) or IMPLEMENTATION_PLAN.md (milestone exit criteria).
 - **Commits.** Don't prefix subject lines with `feat:` / `fix:` / etc.; just describe the change. Don't include Claude as a co-author. Only run git commands when asked.

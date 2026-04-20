@@ -37,8 +37,8 @@ path, no second way for the two binaries to disagree.
 | Reserved `overrides` JSON key   | Silently accepted                              | Same, for `--json-input` mode                           | Schema forward-compatibility. |
 | `list_version` in output        | `X-List-Version` header + response body         | Response body only                                      | No HTTP ⇒ no header; JSON body carries it. |
 | Bearer auth                     | Required on `/v1/*`                            | N/A                                                     | Local process; trust the invoker. |
-| `BWS_API_KEYS` / `BWS_MAX_INFLIGHT` / `BWS_LISTEN_ADDR` / `BWS_HISTOGRAM_BUCKETS` | Config-loaded | Ignored | No server, no gate, no metrics. |
-| `BWS_LANGS` compile-time allowlist | Gates engine load at startup                 | Accepted as `--lang` flag on every invocation instead    | Flag-driven is the CLI idiom; env vars are not. |
+| `VV_API_KEYS` / `VV_MAX_INFLIGHT` / `VV_LISTEN_ADDR` / `VV_HISTOGRAM_BUCKETS` | Config-loaded | Ignored | No server, no gate, no metrics. |
+| `VV_LANGS` compile-time allowlist | Gates engine load at startup                 | Accepted as `--lang` flag on every invocation instead    | Flag-driven is the CLI idiom; env vars are not. |
 | 64 KiB raw-body cap             | `RequestBodyLimitLayer`                         | No cap at input; 192 KiB post-normalization cap applies | CLI inputs are already process-bounded. |
 | 413 `payload_too_large`         | Error response                                  | Exit 3 with message on stderr                           | Same underlying `NormalizeError::TooLarge`. |
 | Observability (`tracing`, metrics) | JSON logs + Prometheus                       | `--verbose` stderr diagnostics only                     | No metrics, no persistent logs. |
@@ -305,15 +305,16 @@ without error.
 
 - **Binary name.** Decided: `vv`, after the product name Vocab Veto. Short,
   easy to type, and keeps the CLI recognisable as a separate identity from
-  the crate (`banned-words-service`) and the env-var prefix (`BWS_*`), both
-  of which remain unchanged. The two-letter name does not collide with any
-  common POSIX utility on a default install.
+  the crate (`banned-words-service`, unchanged) and the env-var prefix
+  (`VV_*`, renamed from the old `BWS_*` when the project was rebranded as
+  Vocab Veto). The two-letter name does not collide with any common POSIX
+  utility on a default install.
 - **Should `vv check --json-input` accept NDJSON for streaming many
   records in one invocation?** Attractive for pipelines, not on the
   server's API surface so strictly a CLI-only feature. Default: no,
   defer to user request; one-request-per-invocation keeps the CLI a
   transparent analog of one HTTP call.
-- **Should `vv check` respect a `BWS_LANGS` env var as a default for
+- **Should `vv check` respect a `VV_LANGS` env var as a default for
   `--lang` when neither the flag nor the input JSON sets it?** Server
   parity would say yes (it is the compile-time allowlist surface).
   Default: no — the CLI's idiom is flag-driven, and the server default

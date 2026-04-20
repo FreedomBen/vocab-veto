@@ -20,7 +20,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let prom_handle = observability::install_recorder(cfg.histogram_buckets.as_deref())
         .inspect_err(|e| eprintln!("metrics recorder error: {e}"))?;
 
-    // BWS_LANGS may gate loading to a subset; unset ⇒ every compiled code.
+    // VV_LANGS may gate loading to a subset; unset ⇒ every compiled code.
     // Unknown codes are a fatal startup error per IMPLEMENTATION_PLAN M4 item 4.
     let loaded: Vec<Lang> =
         resolve_loaded_langs(cfg.langs.as_deref()).inspect_err(|e| eprintln!("{e}"))?;

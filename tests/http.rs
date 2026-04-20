@@ -519,7 +519,7 @@ async fn overloaded_returns_503_with_x_list_version() {
 
 #[tokio::test]
 async fn overloaded_does_not_gate_v1_languages() {
-    // DESIGN §Deployment scopes BWS_MAX_INFLIGHT to /v1/check; /v1/languages
+    // DESIGN §Deployment scopes VV_MAX_INFLIGHT to /v1/check; /v1/languages
     // must succeed even when the counter is saturated.
     let req = authed("GET", "/v1/languages", Body::empty());
     let resp = send_with(saturated_state(), req).await;

@@ -38,7 +38,7 @@ For the milestone-ordered implementation plan, see [IMPLEMENTATION_PLAN.md](./IM
 
 LDNOOBW ships one file per language (e.g. `en`, `es`, `fr`, `de`, `ja`, …). At build time we:
 
-1. Vendor the repo as a git submodule pinned at a specific commit SHA. That SHA is the authoritative list version surfaced via `X-List-Version`, `/readyz`, and the `bws_list_version_info` metric; reproducible builds depend on it.
+1. Vendor the repo as a git submodule pinned at a specific commit SHA. That SHA is the authoritative list version surfaced via `X-List-Version`, `/readyz`, and the `vv_list_version_info` metric; reproducible builds depend on it.
 2. Generate a `phf`-backed map `lang -> &[&str]` via `build.rs` (compile-time, zero-alloc lookup into the term tables).
 3. At startup, build one `AhoCorasick` automaton per language and store them in an `Arc<HashMap<Lang, AhoCorasick>>`. The automaton map uses `HashMap` rather than `phf` because `AhoCorasick` is not const-constructible; it is populated once at startup and read-only thereafter. Automatons are immutable and shared across all request tasks.
 
@@ -68,7 +68,7 @@ All `/v1/*` endpoints require an API key presented as:
 Authorization: Bearer <api-key>
 ```
 
-Each candidate key in `BWS_API_KEYS` is compared to the presented key via `subtle::ConstantTimeEq`; the service iterates the full configured set regardless of where a match occurs, so the loop leaks only the configured key-count via timing, never key material. Missing or unrecognized keys return **401 `unauthorized`** before any body parse or matching work — unauthenticated traffic pays ~zero CPU. `/healthz`, `/readyz`, and `/metrics` are deliberately **not** auth-gated so Kubernetes probes and Prometheus scrapers work without key provisioning; those endpoints should be reachable only from the cluster/pod network.
+Each candidate key in `VV_API_KEYS` is compared to the presented key via `subtle::ConstantTimeEq`; the service iterates the full configured set regardless of where a match occurs, so the loop leaks only the configured key-count via timing, never key material. Missing or unrecognized keys return **401 `unauthorized`** before any body parse or matching work — unauthenticated traffic pays ~zero CPU. `/healthz`, `/readyz`, and `/metrics` are deliberately **not** auth-gated so Kubernetes probes and Prometheus scrapers work without key provisioning; those endpoints should be reachable only from the cluster/pod network.
 
 Request logs record only `key_id` — the first 8 hex characters of the key's SHA-256 — never the key itself. This is enough to correlate traffic to a specific caller and to track rotation without leaking secrets into log aggregation. On 401, logs record only the failure `reason` (`missing` or `invalid`) — never the attempted key nor any hash prefix derived from it, so the endpoint cannot be used as an oracle to probe the key space.
 
@@ -118,7 +118,7 @@ Error response (4xx):
 
 | HTTP | `error`             | Condition                                                    |
 | ---- | ------------------- | ------------------------------------------------------------ |
-| 401  | `unauthorized`      | Missing `Authorization` header, or key not in `BWS_API_KEYS`. |
+| 401  | `unauthorized`      | Missing `Authorization` header, or key not in `VV_API_KEYS`. |
 | 400  | `bad_request`       | Malformed JSON, or `text` field missing entirely.            |
 | 413  | `payload_too_large` | Request body exceeds 64 KiB.                                 |
 | 422  | `invalid_mode`      | `mode` is present but not in the enum.                       |
@@ -126,7 +126,7 @@ Error response (4xx):
 | 422  | `empty_text`        | `text` is present but empty (`""`).                          |
 | 422  | `empty_langs`       | `langs` is present but empty (`[]`).                         |
 | 500  | `internal`          | Unexpected server error. `message` is a short, fixed string; diagnostic detail goes to structured logs, never the response body. |
-| 503  | `overloaded`        | In-flight request count is at `BWS_MAX_INFLIGHT`. Backpressure signal; retry with jitter. |
+| 503  | `overloaded`        | In-flight request count is at `VV_MAX_INFLIGHT`. Backpressure signal; retry with jitter. |
 
 ### Other endpoints
 
@@ -151,18 +151,18 @@ Error response (4xx):
 
 | Metric                         | Type      | Labels                   | Purpose                                                                  |
 | ------------------------------ | --------- | ------------------------ | ------------------------------------------------------------------------ |
-| `bws_requests_total`           | counter   | `status` (2xx / 4xx / 5xx) | Request rate and error ratio — the R and E of RED. Fast-pathed 401s increment this under `status="4xx"` in addition to `bws_auth_failures_total`. |
-| `bws_auth_failures_total`      | counter   | `reason` (missing / invalid) | Auth rejection rate; a sudden spike indicates a rotated key or probing. |
-| `bws_request_duration_seconds` | histogram | `status`, `endpoint`     | End-to-end latency including JSON parse and serialize. `endpoint` is one of `/v1/check`, `/v1/languages`, `/healthz`, `/readyz`, `/metrics`; fast-pathed 401s are recorded here too. |
-| `bws_match_duration_seconds`   | histogram | `lang`, `mode`           | Aho-Corasick scan time per (lang, mode), observed once per scanned language per request; isolates the hot path from HTTP/JSON overhead. |
-| `bws_matches_per_request`      | histogram | —                        | Distribution of match counts per request; informs tuning of the 256 cap. |
-| `bws_truncated_total`          | counter   | —                        | Count of responses with `truncated: true`; expected rare, alert-worthy if not. |
-| `bws_input_bytes`              | histogram | —                        | Distribution of `text` lengths in bytes; detects outlier traffic.        |
-| `bws_list_version_info`        | gauge     | `list_version`           | Constant 1; lets dashboards and alerts pivot on list version across a pod fleet. Label value is the same LDNOOBW commit SHA surfaced in `X-List-Version` and `/readyz`. During a rolling deploy this label briefly takes two values (old + new); treat that as expected, not cardinality growth. |
-| `bws_languages_loaded`         | gauge     | —                        | Count of automatons live after startup; sanity check for `BWS_LANGS`.    |
-| `bws_inflight`                 | gauge     | —                        | Current in-flight `/v1/check` request count (counts against `BWS_MAX_INFLIGHT`). Lets dashboards answer "how close are we to the cap?" without inferring it from 503 rates. |
+| `vv_requests_total`           | counter   | `status` (2xx / 4xx / 5xx) | Request rate and error ratio — the R and E of RED. Fast-pathed 401s increment this under `status="4xx"` in addition to `vv_auth_failures_total`. |
+| `vv_auth_failures_total`      | counter   | `reason` (missing / invalid) | Auth rejection rate; a sudden spike indicates a rotated key or probing. |
+| `vv_request_duration_seconds` | histogram | `status`, `endpoint`     | End-to-end latency including JSON parse and serialize. `endpoint` is one of `/v1/check`, `/v1/languages`, `/healthz`, `/readyz`, `/metrics`; fast-pathed 401s are recorded here too. |
+| `vv_match_duration_seconds`   | histogram | `lang`, `mode`           | Aho-Corasick scan time per (lang, mode), observed once per scanned language per request; isolates the hot path from HTTP/JSON overhead. |
+| `vv_matches_per_request`      | histogram | —                        | Distribution of match counts per request; informs tuning of the 256 cap. |
+| `vv_truncated_total`          | counter   | —                        | Count of responses with `truncated: true`; expected rare, alert-worthy if not. |
+| `vv_input_bytes`              | histogram | —                        | Distribution of `text` lengths in bytes; detects outlier traffic.        |
+| `vv_list_version_info`        | gauge     | `list_version`           | Constant 1; lets dashboards and alerts pivot on list version across a pod fleet. Label value is the same LDNOOBW commit SHA surfaced in `X-List-Version` and `/readyz`. During a rolling deploy this label briefly takes two values (old + new); treat that as expected, not cardinality growth. |
+| `vv_languages_loaded`         | gauge     | —                        | Count of automatons live after startup; sanity check for `VV_LANGS`.    |
+| `vv_inflight`                 | gauge     | —                        | Current in-flight `/v1/check` request count (counts against `VV_MAX_INFLIGHT`). Lets dashboards answer "how close are we to the cap?" without inferring it from 503 rates. |
 
-Histogram buckets default to the `axum-prometheus` preset tuned for sub-millisecond latency; override via `BWS_HISTOGRAM_BUCKETS` (comma-separated ascending floats in seconds) for deployments with different SLO targets. The override applies to both `bws_request_duration_seconds` and `bws_match_duration_seconds`.
+Histogram buckets default to the `axum-prometheus` preset tuned for sub-millisecond latency; override via `VV_HISTOGRAM_BUCKETS` (comma-separated ascending floats in seconds) for deployments with different SLO targets. The override applies to both `vv_request_duration_seconds` and `vv_match_duration_seconds`.
 
 ### Why return match spans
 
@@ -181,35 +181,35 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 
 - Single stateless binary, horizontally scalable.
 - Container image built via `cargo chef` for fast layer caching.
-- Config via env vars and an optional TOML file. Figment loads `/etc/bws/config.toml` first (path overridable via `BWS_CONFIG_FILE`), then env — env wins on overlap. The default TOML path being absent is not an error; a `BWS_CONFIG_FILE` pointing at a missing file **is** fatal (explicit operator intent). TOML keys are the lowercase env-var names without the `BWS_` prefix (`listen_addr`, `api_keys`, `langs`, `max_inflight`); array-valued keys are TOML arrays rather than comma-separated strings. All post-parse rules below (whitespace trim, dedup, empty-entry rejection, ASCII-lowercase, short-key warning) apply identically to both sources.
-  - `BWS_LISTEN_ADDR` — HTTP listen address. Defaults to `0.0.0.0:8080` when unset.
-  - `BWS_API_KEYS` — **required**, comma-separated list of accepted API keys (e.g. `k_prod_ab12…,k_prod_cd34…`). Parsing: split on `,`, trim surrounding ASCII whitespace from each entry, reject empty entries, deduplicate. Keys cannot themselves contain `,` — rotate to comma-free keys if the existing set has any. If unset, empty, or if parsing yields zero keys, the service **refuses to start** with a clear error — there is no open/anonymous mode. Keys should be ≥32 bytes of cryptographically random data; the service warns (does not reject) on shorter keys so legacy tokens can be rotated in gracefully. Rotation: redeploy with the union of old + new keys, wait for callers to cut over, then redeploy with only the new set — no hot reload.
-  - `BWS_LANGS` — optional comma-separated runtime allowlist (e.g. `en,es,fr`). Defaults to every language compiled into the binary. Parsing: split on `,`, trim surrounding ASCII whitespace from each entry, ASCII-lowercase, reject empty entries, deduplicate. Useful for slimming a single fat image down to a specific deployment's needs without rebuilding. A code not compiled into the binary is a **fatal startup error** (`unknown language in BWS_LANGS: xx; compiled: ...`); silent drops would mask deploy-config typos and let a pod come up serving fewer languages than the operator intended.
-  - `BWS_MAX_INFLIGHT` — optional cap on concurrent in-flight `/v1/check` requests. Default `1024`. When at capacity, new requests are rejected with **503 `overloaded`** before body parse, bounding worst-case in-flight memory to roughly `BWS_MAX_INFLIGHT × (64 KiB body + 192 KiB normalized buffer + offset map)` — NFKC compatibility expansion is capped at 3× via the normalized-length check, and requests that would exceed 192 KiB normalized are rejected with 413 before the scan runs. This is a liveness safeguard, not a rate limit; callers should retry with jitter. Excluded from the cap: `/healthz`, `/readyz`, `/metrics`, and 401-fast-path rejections (all of which do no bounded-size work).
-  - `BWS_HISTOGRAM_BUCKETS` — optional. Comma-separated ascending floats in seconds; overrides the default bucket boundaries for both `bws_request_duration_seconds` and `bws_match_duration_seconds`. Unset = `axum-prometheus` sub-millisecond preset. Parse errors are a fatal startup error.
-  - *(No `BWS_DEFAULT_MODE` — mode defaulting is per-language and defined in code, not config, so behavior is identical across deployments.)*
+- Config via env vars and an optional TOML file. Figment loads `/etc/vv/config.toml` first (path overridable via `VV_CONFIG_FILE`), then env — env wins on overlap. The default TOML path being absent is not an error; a `VV_CONFIG_FILE` pointing at a missing file **is** fatal (explicit operator intent). TOML keys are the lowercase env-var names without the `VV_` prefix (`listen_addr`, `api_keys`, `langs`, `max_inflight`); array-valued keys are TOML arrays rather than comma-separated strings. All post-parse rules below (whitespace trim, dedup, empty-entry rejection, ASCII-lowercase, short-key warning) apply identically to both sources.
+  - `VV_LISTEN_ADDR` — HTTP listen address. Defaults to `0.0.0.0:8080` when unset.
+  - `VV_API_KEYS` — **required**, comma-separated list of accepted API keys (e.g. `k_prod_ab12…,k_prod_cd34…`). Parsing: split on `,`, trim surrounding ASCII whitespace from each entry, reject empty entries, deduplicate. Keys cannot themselves contain `,` — rotate to comma-free keys if the existing set has any. If unset, empty, or if parsing yields zero keys, the service **refuses to start** with a clear error — there is no open/anonymous mode. Keys should be ≥32 bytes of cryptographically random data; the service warns (does not reject) on shorter keys so legacy tokens can be rotated in gracefully. Rotation: redeploy with the union of old + new keys, wait for callers to cut over, then redeploy with only the new set — no hot reload.
+  - `VV_LANGS` — optional comma-separated runtime allowlist (e.g. `en,es,fr`). Defaults to every language compiled into the binary. Parsing: split on `,`, trim surrounding ASCII whitespace from each entry, ASCII-lowercase, reject empty entries, deduplicate. Useful for slimming a single fat image down to a specific deployment's needs without rebuilding. A code not compiled into the binary is a **fatal startup error** (`unknown language in VV_LANGS: xx; compiled: ...`); silent drops would mask deploy-config typos and let a pod come up serving fewer languages than the operator intended.
+  - `VV_MAX_INFLIGHT` — optional cap on concurrent in-flight `/v1/check` requests. Default `1024`. When at capacity, new requests are rejected with **503 `overloaded`** before body parse, bounding worst-case in-flight memory to roughly `VV_MAX_INFLIGHT × (64 KiB body + 192 KiB normalized buffer + offset map)` — NFKC compatibility expansion is capped at 3× via the normalized-length check, and requests that would exceed 192 KiB normalized are rejected with 413 before the scan runs. This is a liveness safeguard, not a rate limit; callers should retry with jitter. Excluded from the cap: `/healthz`, `/readyz`, `/metrics`, and 401-fast-path rejections (all of which do no bounded-size work).
+  - `VV_HISTOGRAM_BUCKETS` — optional. Comma-separated ascending floats in seconds; overrides the default bucket boundaries for both `vv_request_duration_seconds` and `vv_match_duration_seconds`. Unset = `axum-prometheus` sub-millisecond preset. Parse errors are a fatal startup error.
+  - *(No `VV_DEFAULT_MODE` — mode defaulting is per-language and defined in code, not config, so behavior is identical across deployments.)*
 - **List updates ship via redeploy.** No hot reload, ever — it keeps the hot path lock-free and makes the running version trivially auditable (image tag = list version).
 
 ### Kubernetes deployment (DOKS)
 
 - **Target.** Digital Ocean Kubernetes Service (DOKS), deployed into an **existing** shared cluster. Cluster provisioning is out of scope; this assumes standard `kubectl` access and an in-cluster Prometheus stack that scrapes `/metrics`.
 - **Exposure: in-cluster only in v1.** A single `Service` of type `ClusterIP` fronts the pods on port 8080. **No Ingress, LoadBalancer, or NodePort** — the service is not reachable from outside the cluster, and the API key is defense-in-depth over that network boundary, not the sole perimeter. In-cluster consumers reach it at `banned-words-service.<namespace>.svc.cluster.local:8080`. Public exposure (behind a rate-limiting gateway / WAF) is a deliberate future step; see "Deferred to v2".
-- **Config delivery.** `BWS_API_KEYS` lives in a Kubernetes `Secret`; `BWS_LANGS`, `BWS_MAX_INFLIGHT`, and `BWS_LISTEN_ADDR` live in a `ConfigMap`. Both mount as env vars on the pod. Rotating keys is a `Secret` edit plus rolling restart — no hot reload, matching the "immutable at runtime" principle.
+- **Config delivery.** `VV_API_KEYS` lives in a Kubernetes `Secret`; `VV_LANGS`, `VV_MAX_INFLIGHT`, and `VV_LISTEN_ADDR` live in a `ConfigMap`. Both mount as env vars on the pod. Rotating keys is a `Secret` edit plus rolling restart — no hot reload, matching the "immutable at runtime" principle.
 - **Probes.** `livenessProbe` → `GET /healthz`; `readinessProbe` → `GET /readyz`. Both are unauthenticated per API §Authentication. The listener binds only after automatons finish loading, so in practice readiness flips to 200 as soon as the pod accepts TCP; the documented 503 window is effectively unobservable except by a sidecar that races startup.
 - **Pod security context.** Non-root UID, `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`, all capabilities dropped, `seccompProfile: RuntimeDefault`. The binary needs no writable paths (list is compiled in; logs go to stdout).
-- **Rollout.** Standard `RollingUpdate`. Pods are fungible and cold-start in milliseconds (automaton build ≪ image pull), so low `maxUnavailable` with small `maxSurge` is cheap. During a rolling deploy `X-List-Version` and the `bws_list_version_info` gauge briefly take two values across the fleet — expected, not cardinality growth.
-- **Scaling.** Horizontal via replicas; HPA on CPU plus `bws_inflight` (via the cluster's Prometheus custom-metrics adapter, assumed already installed). No VPA — memory footprint is flat and bounded by `BWS_MAX_INFLIGHT × ~256 KiB` worst case.
+- **Rollout.** Standard `RollingUpdate`. Pods are fungible and cold-start in milliseconds (automaton build ≪ image pull), so low `maxUnavailable` with small `maxSurge` is cheap. During a rolling deploy `X-List-Version` and the `vv_list_version_info` gauge briefly take two values across the fleet — expected, not cardinality growth.
+- **Scaling.** Horizontal via replicas; HPA on CPU plus `vv_inflight` (via the cluster's Prometheus custom-metrics adapter, assumed already installed). No VPA — memory footprint is flat and bounded by `VV_MAX_INFLIGHT × ~256 KiB` worst case.
 
 ## Threat model and abuse posture
 
-The service authenticates every `/v1/*` request against the key set in `BWS_API_KEYS` (see "Authentication" under API). It does **not** perform per-caller rate limiting, quotas, or request signing beyond that — those belong in the gateway. It is expected to sit behind an authenticated gateway or inside a trusted internal network (in v1 this means in-cluster only on DOKS — `ClusterIP` Service, no Ingress; see Deployment §"Kubernetes deployment (DOKS)"); the API key is a second line of defense, not the only one.
+The service authenticates every `/v1/*` request against the key set in `VV_API_KEYS` (see "Authentication" under API). It does **not** perform per-caller rate limiting, quotas, or request signing beyond that — those belong in the gateway. It is expected to sit behind an authenticated gateway or inside a trusted internal network (in v1 this means in-cluster only on DOKS — `ClusterIP` Service, no Ingress; see Deployment §"Kubernetes deployment (DOKS)"); the API key is a second line of defense, not the only one.
 
 **In-process defenses:**
 
 - **401 fast path.** Missing or invalid keys are rejected before body parse and before the concurrency-cap gate, so unauthenticated traffic cannot force the service to allocate a parser, run a scan, or consume an in-flight slot.
 - **64 KiB raw body cap and 192 KiB NFKC-normalized cap** — 413 above either.
 - **256-match response cap** — `truncated: true` above that.
-- **Concurrency cap** (`BWS_MAX_INFLIGHT`, default 1024) — 503 `overloaded` above that. Bounds worst-case in-flight memory independent of gateway behavior.
+- **Concurrency cap** (`VV_MAX_INFLIGHT`, default 1024) — 503 `overloaded` above that. Bounds worst-case in-flight memory independent of gateway behavior.
 - **Bounded per-request work.** The Aho-Corasick scan is O(n) in input length with a constant factor independent of list size; no input can force superlinear CPU or memory. The 256-match cap bounds response size and per-match allocations, not scan cost — the scan always traverses the full input regardless of how many hits it produces.
 - **Constant-time key comparison** and **hash-prefix-only logging of authenticated requests** (no key-derived data on auth failure) prevent key-material leaks via timing or log exfiltration.
 

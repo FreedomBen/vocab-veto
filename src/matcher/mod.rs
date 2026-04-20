@@ -22,14 +22,14 @@ include!(concat!(env!("OUT_DIR"), "/generated_terms.rs"));
 
 /// Sorted list of language codes compiled into the binary (the keys of
 /// `TERMS`). Used as both the default load set and the error-message listing
-/// when `BWS_LANGS` contains an unknown code.
+/// when `VV_LANGS` contains an unknown code.
 pub fn compiled_langs() -> Vec<&'static str> {
     let mut v: Vec<&'static str> = TERMS.keys().copied().collect();
     v.sort_unstable();
     v
 }
 
-/// Raised at startup when `BWS_LANGS` contains a code that has no compiled
+/// Raised at startup when `VV_LANGS` contains a code that has no compiled
 /// term table. Message lists every unknown entry and every available code so
 /// operators can fix the config without spelunking DESIGN.
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ impl fmt::Display for UnknownLangsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "BWS_LANGS contains unknown code(s): [{}]. Compiled codes: [{}]",
+            "VV_LANGS contains unknown code(s): [{}]. Compiled codes: [{}]",
             self.unknown.join(", "),
             self.available.join(", ")
         )

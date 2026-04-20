@@ -8,7 +8,7 @@
 #   set image`, or your deploy pipeline. The image tag is the LDNOOBW SHA so a
 #   running pod's list version is trivially auditable.
 # - Resource requests/limits are placeholders until the M8 load-test data is
-#   in. Memory is bounded by BWS_MAX_INFLIGHT × ~256 KiB worst case.
+#   in. Memory is bounded by VV_MAX_INFLIGHT × ~256 KiB worst case.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

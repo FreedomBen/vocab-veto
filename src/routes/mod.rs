@@ -41,7 +41,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     //   → handler (post-normalization 192 KiB cap via NormalizeError::TooLarge)
     //
     // /v1/languages shares everything in the chain except the gate — DESIGN
-    // §Deployment scopes BWS_MAX_INFLIGHT to /v1/check only. The gate layer
+    // §Deployment scopes VV_MAX_INFLIGHT to /v1/check only. The gate layer
     // is applied to a router that only contains /v1/check, then /v1/languages
     // is added afterwards so the layer doesn't reach it.
     let v1: Router<Arc<AppState>> = Router::new()
@@ -62,7 +62,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/metrics", get(metrics::metrics));
 
     // The RED layer sits *above* auth so fast-path 401s still count into
-    // `bws_requests_total{status="4xx"}` and `bws_request_duration_seconds`,
+    // `vv_requests_total{status="4xx"}` and `vv_request_duration_seconds`,
     // per DESIGN §Metrics contract and IMPLEMENTATION_PLAN M6 item 1.
     Router::new()
         .merge(v1)

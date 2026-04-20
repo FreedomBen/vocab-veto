@@ -60,8 +60,8 @@ podman: ## Build the container image (rootless podman; see footer for override),
 	  -t $(IMAGE_NAME):latest \
 	  .
 
-run: ## Run locally via cargo run with a dev-only BWS_API_KEYS
-	BWS_API_KEYS="$(DEV_API_KEY)" $(CARGO) run --release --locked
+run: ## Run locally via cargo run with a dev-only VV_API_KEYS
+	VV_API_KEYS="$(DEV_API_KEY)" $(CARGO) run --release --locked
 
 install-tools: ## Install pinned dev tools (oha for load tests)
 	$(CARGO) install --locked --version $(OHA_VERSION) oha

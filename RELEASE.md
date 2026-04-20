@@ -64,7 +64,7 @@ instead.
 With the service running from the image under test:
 
 ```bash
-curl -is -H "Authorization: Bearer ${BWS_API_KEYS}" \
+curl -is -H "Authorization: Bearer ${VV_API_KEYS}" \
     -d '{"text":"hello"}' \
     http://127.0.0.1:8080/v1/check \
     | grep -i '^x-list-version:'

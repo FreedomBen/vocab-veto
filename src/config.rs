@@ -1,4 +1,4 @@
-//! Runtime configuration loader. Reads TOML (optional) then env (`BWS_*`),
+//! Runtime configuration loader. Reads TOML (optional) then env (`VV_*`),
 //! with env winning on overlap. See IMPLEMENTATION_PLAN M3 item 1.
 
 use std::collections::HashSet;
@@ -11,7 +11,7 @@ use figment::{
 };
 use serde::Deserialize;
 
-const DEFAULT_TOML_PATH: &str = "/etc/bws/config.toml";
+const DEFAULT_TOML_PATH: &str = "/etc/vv/config.toml";
 const DEFAULT_LISTEN_ADDR: &str = "0.0.0.0:8080";
 const DEFAULT_MAX_INFLIGHT: usize = 1024;
 const MIN_KEY_LEN_WARN: usize = 32;
@@ -25,9 +25,9 @@ pub struct Config {
     /// against compiled codes lands in M4; M3 parses but doesn't gate on it.
     pub langs: Option<Vec<String>>,
     pub max_inflight: usize,
-    /// Optional override for `bws_request_duration_seconds` and
-    /// `bws_match_duration_seconds` bucket boundaries. `None` ⇒ exporter's
-    /// default. Parsed from `BWS_HISTOGRAM_BUCKETS` per DESIGN §Metrics contract.
+    /// Optional override for `vv_request_duration_seconds` and
+    /// `vv_match_duration_seconds` bucket boundaries. `None` ⇒ exporter's
+    /// default. Parsed from `VV_HISTOGRAM_BUCKETS` per DESIGN §Metrics contract.
     pub histogram_buckets: Option<Vec<f64>>,
 }
 
@@ -42,12 +42,12 @@ pub enum ConfigError {
 impl fmt::Display for ConfigError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TomlMissing(p) => write!(f, "BWS_CONFIG_FILE={p} does not exist"),
+            Self::TomlMissing(p) => write!(f, "VV_CONFIG_FILE={p} does not exist"),
             Self::Parse(m) => write!(f, "config parse error: {m}"),
             Self::Invalid(m) => write!(f, "invalid config: {m}"),
             Self::NoApiKeys => write!(
                 f,
-                "BWS_API_KEYS is required and must contain at least one non-empty entry"
+                "VV_API_KEYS is required and must contain at least one non-empty entry"
             ),
         }
     }
@@ -88,7 +88,7 @@ impl StringOrList {
 /// Build the figment provider chain per the plan: TOML first, env second.
 /// Returns the raw figment (un-extracted) so tests can substitute sources.
 fn build_figment() -> Result<Figment, ConfigError> {
-    let explicit_path = std::env::var("BWS_CONFIG_FILE").ok();
+    let explicit_path = std::env::var("VV_CONFIG_FILE").ok();
     let toml_path = explicit_path
         .clone()
         .unwrap_or_else(|| DEFAULT_TOML_PATH.to_string());
@@ -101,9 +101,9 @@ fn build_figment() -> Result<Figment, ConfigError> {
     if toml_exists {
         f = f.merge(Toml::file(&toml_path));
     }
-    // `BWS_API_KEYS` → `api_keys`, etc. No underscore-splitting so multi-word
+    // `VV_API_KEYS` → `api_keys`, etc. No underscore-splitting so multi-word
     // keys like `listen_addr` land on the right field.
-    f = f.merge(Env::prefixed("BWS_").lowercase(true));
+    f = f.merge(Env::prefixed("VV_").lowercase(true));
     Ok(f)
 }
 
@@ -147,14 +147,14 @@ fn parse_api_keys(src: Option<StringOrList>) -> Result<Vec<Vec<u8>>, ConfigError
         let k = raw.trim();
         if k.is_empty() {
             return Err(ConfigError::Invalid(
-                "BWS_API_KEYS contains an empty entry".to_string(),
+                "VV_API_KEYS contains an empty entry".to_string(),
             ));
         }
         if k.len() < MIN_KEY_LEN_WARN {
             tracing::warn!(
                 target: "config",
                 len = k.len(),
-                "BWS_API_KEYS entry shorter than {MIN_KEY_LEN_WARN} bytes"
+                "VV_API_KEYS entry shorter than {MIN_KEY_LEN_WARN} bytes"
             );
         }
         let kb = k.as_bytes().to_vec();
@@ -168,7 +168,7 @@ fn parse_api_keys(src: Option<StringOrList>) -> Result<Vec<Vec<u8>>, ConfigError
     Ok(keys)
 }
 
-/// `BWS_HISTOGRAM_BUCKETS` parser per DESIGN §Metrics contract. Rules enforced
+/// `VV_HISTOGRAM_BUCKETS` parser per DESIGN §Metrics contract. Rules enforced
 /// here match IMPLEMENTATION_PLAN M6 item 1: non-float entries, non-ascending
 /// order, and empty lists are all fatal startup errors.
 fn parse_histogram_buckets(src: StringOrList) -> Result<Vec<f64>, ConfigError> {
@@ -177,23 +177,23 @@ fn parse_histogram_buckets(src: StringOrList) -> Result<Vec<f64>, ConfigError> {
         let s = raw.trim();
         if s.is_empty() {
             return Err(ConfigError::Invalid(
-                "BWS_HISTOGRAM_BUCKETS contains an empty entry".to_string(),
+                "VV_HISTOGRAM_BUCKETS contains an empty entry".to_string(),
             ));
         }
         let v: f64 = s.parse().map_err(|_| {
             ConfigError::Invalid(format!(
-                "BWS_HISTOGRAM_BUCKETS entry {s:?} is not a valid float"
+                "VV_HISTOGRAM_BUCKETS entry {s:?} is not a valid float"
             ))
         })?;
         if !v.is_finite() {
             return Err(ConfigError::Invalid(format!(
-                "BWS_HISTOGRAM_BUCKETS entry {s:?} must be finite"
+                "VV_HISTOGRAM_BUCKETS entry {s:?} must be finite"
             )));
         }
         if let Some(prev) = out.last() {
             if v <= *prev {
                 return Err(ConfigError::Invalid(format!(
-                    "BWS_HISTOGRAM_BUCKETS must be strictly ascending; {v} not greater than {prev}"
+                    "VV_HISTOGRAM_BUCKETS must be strictly ascending; {v} not greater than {prev}"
                 )));
             }
         }
@@ -201,7 +201,7 @@ fn parse_histogram_buckets(src: StringOrList) -> Result<Vec<f64>, ConfigError> {
     }
     if out.is_empty() {
         return Err(ConfigError::Invalid(
-            "BWS_HISTOGRAM_BUCKETS must contain at least one entry".to_string(),
+            "VV_HISTOGRAM_BUCKETS must contain at least one entry".to_string(),
         ));
     }
     Ok(out)
@@ -214,7 +214,7 @@ fn parse_langs(src: StringOrList) -> Result<Vec<String>, ConfigError> {
         let l = raw.trim().to_ascii_lowercase();
         if l.is_empty() {
             return Err(ConfigError::Invalid(
-                "BWS_LANGS contains an empty entry".to_string(),
+                "VV_LANGS contains an empty entry".to_string(),
             ));
         }
         if seen.insert(l.clone()) {
@@ -223,7 +223,7 @@ fn parse_langs(src: StringOrList) -> Result<Vec<String>, ConfigError> {
     }
     if langs.is_empty() {
         return Err(ConfigError::Invalid(
-            "BWS_LANGS must contain at least one entry".to_string(),
+            "VV_LANGS must contain at least one entry".to_string(),
         ));
     }
     Ok(langs)
@@ -333,9 +333,9 @@ mod tests {
                 max_inflight = 4
                 "#,
             )?;
-            jail.set_env("BWS_CONFIG_FILE", "config.toml");
-            jail.set_env("BWS_LISTEN_ADDR", "0.0.0.0:9999");
-            jail.set_env("BWS_MAX_INFLIGHT", "42");
+            jail.set_env("VV_CONFIG_FILE", "config.toml");
+            jail.set_env("VV_LISTEN_ADDR", "0.0.0.0:9999");
+            jail.set_env("VV_MAX_INFLIGHT", "42");
             let fig = build_figment().expect("build figment");
             let raw: RawConfig = fig.extract()?;
             let cfg = assemble(raw).expect("assemble");
@@ -350,9 +350,9 @@ mod tests {
     #[test]
     fn absent_default_toml_yields_same_as_env_only() {
         Jail::expect_with(|jail: &mut Jail| {
-            // Don't set BWS_CONFIG_FILE. Default /etc/bws/config.toml is
+            // Don't set VV_CONFIG_FILE. Default /etc/vv/config.toml is
             // overwhelmingly unlikely to exist in a cargo test sandbox.
-            jail.set_env("BWS_API_KEYS", "env-only-key-aaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            jail.set_env("VV_API_KEYS", "env-only-key-aaaaaaaaaaaaaaaaaaaaaaaaaaa");
             let fig = build_figment().expect("build figment");
             let raw: RawConfig = fig.extract()?;
             let cfg = assemble(raw).expect("assemble");
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn explicit_missing_toml_is_fatal() {
         Jail::expect_with(|jail: &mut Jail| {
-            jail.set_env("BWS_CONFIG_FILE", "definitely-not-there.toml");
+            jail.set_env("VV_CONFIG_FILE", "definitely-not-there.toml");
             let err = build_figment().unwrap_err();
             assert!(matches!(err, ConfigError::TomlMissing(_)), "got {err:?}");
             Ok(())

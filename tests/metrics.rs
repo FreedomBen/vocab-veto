@@ -87,7 +87,7 @@ async fn metrics_after_mixed_workload() {
     .await;
     assert_eq!(ok.status(), StatusCode::OK);
 
-    // 2. Missing-auth 401 — exercises bws_auth_failures_total{reason="missing"}
+    // 2. Missing-auth 401 — exercises vv_auth_failures_total{reason="missing"}
     //    and confirms RED layer sees it as 4xx despite the fast path.
     let unauth = send(
         s.clone(),
@@ -146,11 +146,11 @@ async fn metrics_after_mixed_workload() {
 
     // RED pair: request counter split by status class.
     assert!(
-        body.contains(r#"bws_requests_total{status="2xx"}"#),
+        body.contains(r#"vv_requests_total{status="2xx"}"#),
         "missing 2xx counter line; body:\n{body}"
     );
     assert!(
-        body.contains(r#"bws_requests_total{status="4xx"}"#),
+        body.contains(r#"vv_requests_total{status="4xx"}"#),
         "missing 4xx counter line; body:\n{body}"
     );
 
@@ -160,40 +160,40 @@ async fn metrics_after_mixed_workload() {
     for ep in ["/v1/check", "/v1/languages", "/healthz"] {
         let needle = format!(r#"endpoint="{ep}""#);
         assert!(
-            body.contains(&needle) && body.contains("bws_request_duration_seconds"),
+            body.contains(&needle) && body.contains("vv_request_duration_seconds"),
             "missing duration histogram for endpoint {ep}; body:\n{body}"
         );
     }
 
     // Auth failures split by reason.
     assert!(
-        body.contains(r#"bws_auth_failures_total{reason="missing"}"#),
+        body.contains(r#"vv_auth_failures_total{reason="missing"}"#),
         "missing auth-failure reason=missing"
     );
     assert!(
-        body.contains(r#"bws_auth_failures_total{reason="invalid"}"#),
+        body.contains(r#"vv_auth_failures_total{reason="invalid"}"#),
         "missing auth-failure reason=invalid"
     );
 
     // Per-language match duration for the successful strict en scan.
     assert!(
-        body.contains(r#"bws_match_duration_seconds_count{lang="en",mode="strict"}"#),
+        body.contains(r#"vv_match_duration_seconds_count{lang="en",mode="strict"}"#),
         "missing per-lang match-duration histogram; body:\n{body}"
     );
 
     // Matches-per-request and input-bytes histograms recorded on the success.
     assert!(
-        body.contains("bws_matches_per_request_count"),
+        body.contains("vv_matches_per_request_count"),
         "missing matches-per-request histogram"
     );
     assert!(
-        body.contains("bws_input_bytes_count"),
+        body.contains("vv_input_bytes_count"),
         "missing input-bytes histogram"
     );
 
     // Info + startup gauges.
     let list_version_line = format!(
-        r#"bws_list_version_info{{list_version="{LIST_VERSION}"}} 1"#,
+        r#"vv_list_version_info{{list_version="{LIST_VERSION}"}} 1"#,
         LIST_VERSION = LIST_VERSION
     );
     assert!(
@@ -201,18 +201,18 @@ async fn metrics_after_mixed_workload() {
         "missing list-version info gauge; expected `{list_version_line}`; body:\n{body}"
     );
     assert!(
-        body.contains("bws_languages_loaded 1"),
+        body.contains("vv_languages_loaded 1"),
         "missing languages-loaded gauge"
     );
-    // bws_inflight is snapshot on every /metrics scrape. After the workload the
+    // vv_inflight is snapshot on every /metrics scrape. After the workload the
     // gate guard has decremented back to 0, so the scrape reports 0 live
     // /v1/check requests.
     assert!(
-        body.contains("bws_inflight 0"),
-        "missing bws_inflight gauge; body:\n{body}"
+        body.contains("vv_inflight 0"),
+        "missing vv_inflight gauge; body:\n{body}"
     );
     assert!(
-        body.contains("bws_max_inflight 1024"),
-        "missing bws_max_inflight gauge"
+        body.contains("vv_max_inflight 1024"),
+        "missing vv_max_inflight gauge"
     );
 }

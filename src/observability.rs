@@ -17,17 +17,17 @@ use metrics_exporter_prometheus::{BuildError, Matcher, PrometheusBuilder, Promet
 
 // Metric names; kept in constants so the RED middleware, the custom
 // observers, and the bucket-override matchers can't drift.
-pub const M_REQUESTS_TOTAL: &str = "bws_requests_total";
-pub const M_AUTH_FAILURES_TOTAL: &str = "bws_auth_failures_total";
-pub const M_REQUEST_DURATION: &str = "bws_request_duration_seconds";
-pub const M_MATCH_DURATION: &str = "bws_match_duration_seconds";
-pub const M_MATCHES_PER_REQUEST: &str = "bws_matches_per_request";
-pub const M_TRUNCATED_TOTAL: &str = "bws_truncated_total";
-pub const M_INPUT_BYTES: &str = "bws_input_bytes";
-pub const M_LIST_VERSION_INFO: &str = "bws_list_version_info";
-pub const M_LANGUAGES_LOADED: &str = "bws_languages_loaded";
-pub const M_INFLIGHT: &str = "bws_inflight";
-pub const M_MAX_INFLIGHT: &str = "bws_max_inflight";
+pub const M_REQUESTS_TOTAL: &str = "vv_requests_total";
+pub const M_AUTH_FAILURES_TOTAL: &str = "vv_auth_failures_total";
+pub const M_REQUEST_DURATION: &str = "vv_request_duration_seconds";
+pub const M_MATCH_DURATION: &str = "vv_match_duration_seconds";
+pub const M_MATCHES_PER_REQUEST: &str = "vv_matches_per_request";
+pub const M_TRUNCATED_TOTAL: &str = "vv_truncated_total";
+pub const M_INPUT_BYTES: &str = "vv_input_bytes";
+pub const M_LIST_VERSION_INFO: &str = "vv_list_version_info";
+pub const M_LANGUAGES_LOADED: &str = "vv_languages_loaded";
+pub const M_INFLIGHT: &str = "vv_inflight";
+pub const M_MAX_INFLIGHT: &str = "vv_max_inflight";
 
 /// JSON `tracing-subscriber` + env-filter. `RUST_LOG` honored; default `info`.
 pub fn init_tracing() {
@@ -43,8 +43,8 @@ pub fn init_tracing() {
 /// optional bucket overrides to both latency histograms, and return the scrape
 /// handle for `/metrics` to render. Callable once per process.
 ///
-/// Bucket override applies to `bws_request_duration_seconds` **and**
-/// `bws_match_duration_seconds`, per DESIGN §Metrics contract.
+/// Bucket override applies to `vv_request_duration_seconds` **and**
+/// `vv_match_duration_seconds`, per DESIGN §Metrics contract.
 pub fn install_recorder(buckets: Option<&[f64]>) -> Result<PrometheusHandle, BuildError> {
     let mut builder = PrometheusBuilder::new();
     if let Some(b) = buckets {
@@ -153,9 +153,9 @@ fn describe_metrics() {
     );
     describe_gauge!(
         M_INFLIGHT,
-        "Current /v1/check requests in flight (counts against BWS_MAX_INFLIGHT)."
+        "Current /v1/check requests in flight (counts against VV_MAX_INFLIGHT)."
     );
-    describe_gauge!(M_MAX_INFLIGHT, "Configured BWS_MAX_INFLIGHT cap.");
+    describe_gauge!(M_MAX_INFLIGHT, "Configured VV_MAX_INFLIGHT cap.");
 }
 
 #[cfg(test)]

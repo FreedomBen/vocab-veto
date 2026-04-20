@@ -1,8 +1,8 @@
 # HPA stub per DESIGN §"Kubernetes deployment (DOKS)".
 #
-# Scales on CPU out of the box. The bws_inflight metric is left commented out
+# Scales on CPU out of the box. The vv_inflight metric is left commented out
 # because it requires a Prometheus custom-metrics adapter — DOKS does not
-# install one by default. Once the adapter exposes `bws_inflight` under the
+# install one by default. Once the adapter exposes `vv_inflight` under the
 # Pods metric API, uncomment the Pods block and the target replicas will track
 # in-flight concurrency rather than CPU alone.
 apiVersion: autoscaling/v2
@@ -29,7 +29,7 @@ spec:
     # - type: Pods
     #   pods:
     #     metric:
-    #       name: bws_inflight
+    #       name: vv_inflight
     #     target:
     #       type: AverageValue
     #       averageValue: "512"

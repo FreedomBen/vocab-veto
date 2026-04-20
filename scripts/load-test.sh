@@ -46,10 +46,10 @@ mkdir -p "${REPORT_DIR}"
 cargo build --release --locked
 
 API_KEY="load-test-$(openssl rand -hex 24)"
-LOG_FILE="$(mktemp -t bws-load-server.XXXXXX.log)"
+LOG_FILE="$(mktemp -t vv-load-server.XXXXXX.log)"
 trap 'if [ -n "${SERVER_PID:-}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then kill "${SERVER_PID}" 2>/dev/null || true; wait "${SERVER_PID}" 2>/dev/null || true; fi; rm -f "${LOG_FILE}"' EXIT
 
-BWS_API_KEYS="${API_KEY}" BWS_LISTEN_ADDR="127.0.0.1:${PORT}" \
+VV_API_KEYS="${API_KEY}" VV_LISTEN_ADDR="127.0.0.1:${PORT}" \
     taskset -c 0 ./target/release/banned-words-service \
     >"${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
@@ -96,7 +96,7 @@ fi
     echo ""
 } > "${REPORT_FILE}"
 
-BWS_API_KEY="${API_KEY}" ./benches/load/oha-1kib-en.sh \
+VV_API_KEY="${API_KEY}" ./benches/load/oha-1kib-en.sh \
     "${BASE_URL}/v1/check" "${DURATION}" "${CONCURRENCY}" \
     | tee -a "${REPORT_FILE}"
 

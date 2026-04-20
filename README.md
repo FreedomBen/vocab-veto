@@ -4,7 +4,7 @@ A stateless, single-binary Rust HTTP service that answers one question across
 many languages: *"Does this string contain a banned word?"*
 
 The repository directory and crate name remain `banned-words-service`; **Vocab
-Veto** is the product name. The `BWS_*` environment-variable prefix is part of
+Veto** is the product name. The `VV_*` environment-variable prefix is part of
 the binary's stable identity and is unchanged.
 
 ## Status
@@ -40,17 +40,17 @@ All common tasks run through the top-level `Makefile`:
 | `make bench`         | `cargo bench --no-run --locked` (compile-check the criterion suite).                                                    |
 | `make lint`          | `cargo fmt --check` + `cargo clippy -- -D warnings`.                                                                    |
 | `make podman`        | Build the distroless container image via rootless podman; override with `CONTAINER=docker`. Tagged with the LDNOOBW SHA. |
-| `make run`           | Run locally with a dev-only `BWS_API_KEYS`.                                                                             |
+| `make run`           | Run locally with a dev-only `VV_API_KEYS`.                                                                             |
 | `make install-tools` | Install pinned dev tools (`oha` for load tests).                                                                        |
 | `make release-check` | Pre-tag gate: `lint` + `test` + `bench` + `podman`. See [RELEASE.md](./RELEASE.md) for the rest of the release flow.    |
 
 ## Configuration
 
-All runtime configuration is via environment variables (`BWS_*`) or an
+All runtime configuration is via environment variables (`VV_*`) or an
 optional TOML file. The authoritative list lives in [DESIGN.md §Deployment](./DESIGN.md#deployment);
-the highlights are `BWS_API_KEYS` (required, comma-separated bearer keys),
-`BWS_LANGS` (optional allowlist), `BWS_MAX_INFLIGHT` (default 1024), and
-`BWS_LISTEN_ADDR` (default `0.0.0.0:8080`).
+the highlights are `VV_API_KEYS` (required, comma-separated bearer keys),
+`VV_LANGS` (optional allowlist), `VV_MAX_INFLIGHT` (default 1024), and
+`VV_LISTEN_ADDR` (default `0.0.0.0:8080`).
 
 ## Deployment
 
@@ -77,7 +77,7 @@ The banned-words corpus is sourced from
 by Shutterstock and contributors. Vocab Veto vendors that repository as a git
 submodule pinned at a specific commit SHA; that SHA is the list version
 surfaced via the `X-List-Version` response header, the `/readyz` endpoint, and
-the `bws_list_version_info` Prometheus metric.
+the `vv_list_version_info` Prometheus metric.
 
 All credit for the curation, translation, and ongoing maintenance of the word
 list belongs to the LDNOOBW project and its contributors. Consult the upstream

@@ -32,12 +32,12 @@ Recipe:
 
 ```bash
 # 1. Start the server pinned to a single core.
-BWS_API_KEYS="$(openssl rand -hex 24)" taskset -c 0 \
+VV_API_KEYS="$(openssl rand -hex 24)" taskset -c 0 \
     cargo run --release --locked &
 SERVER_PID=$!
 
 # 2. Run the load test (reuse the same key you set above).
-BWS_API_KEY="${BWS_API_KEYS}" ./benches/load/oha-1kib-en.sh
+VV_API_KEY="${VV_API_KEYS}" ./benches/load/oha-1kib-en.sh
 
 # 3. Tear down.
 kill "${SERVER_PID}"
@@ -50,9 +50,9 @@ useful for saturation/queue-behavior work, not for the §M8 gate. Use
 producing a release report. Override positionally:
 
 ```bash
-BWS_API_KEY=... ./benches/load/oha-1kib-en.sh http://127.0.0.1:8080/v1/check 60s 128
+VV_API_KEY=... ./benches/load/oha-1kib-en.sh http://127.0.0.1:8080/v1/check 60s 128
 ```
 
-The script fails fast if `oha` or `python3` is missing, or if `BWS_API_KEY`
+The script fails fast if `oha` or `python3` is missing, or if `VV_API_KEY`
 isn't set. oha prints the latency histogram plus p50/p95/p99/p99.9 at the end
 of the run — that's the number the milestone gate is written against.
