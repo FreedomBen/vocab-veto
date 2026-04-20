@@ -57,6 +57,7 @@ mod tests {
             ready: AtomicBool::new(ready),
             max_inflight: 1024,
             inflight: Arc::new(AtomicUsize::new(0)),
+            metrics: None,
         })
     }
 

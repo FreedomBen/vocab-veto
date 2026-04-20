@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::error::{ApiError, UnauthorizedReason};
+use crate::observability::M_AUTH_FAILURES_TOTAL;
 use crate::state::AppState;
 
 pub async fn require_bearer(
@@ -26,6 +27,7 @@ pub async fn require_bearer(
         }
         Err(reason) => {
             tracing::warn!(target: "auth", reason = %reason.as_str(), "auth failure");
+            metrics::counter!(M_AUTH_FAILURES_TOTAL, "reason" => reason.as_str()).increment(1);
             ApiError::Unauthorized(reason).into_response()
         }
     }

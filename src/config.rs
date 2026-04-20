@@ -25,6 +25,10 @@ pub struct Config {
     /// against compiled codes lands in M4; M3 parses but doesn't gate on it.
     pub langs: Option<Vec<String>>,
     pub max_inflight: usize,
+    /// Optional override for `bws_request_duration_seconds` and
+    /// `bws_match_duration_seconds` bucket boundaries. `None` ⇒ exporter's
+    /// default. Parsed from `BWS_HISTOGRAM_BUCKETS` per DESIGN §Metrics contract.
+    pub histogram_buckets: Option<Vec<f64>>,
 }
 
 #[derive(Debug)]
@@ -60,6 +64,7 @@ struct RawConfig {
     api_keys: Option<StringOrList>,
     langs: Option<StringOrList>,
     max_inflight: Option<usize>,
+    histogram_buckets: Option<StringOrList>,
 }
 
 /// TOML arrays stay arrays; env strings get comma-split downstream.
@@ -119,11 +124,16 @@ fn assemble(raw: RawConfig) -> Result<Config, ConfigError> {
     let api_keys = parse_api_keys(raw.api_keys)?;
     let langs = raw.langs.map(parse_langs).transpose()?;
     let max_inflight = raw.max_inflight.unwrap_or(DEFAULT_MAX_INFLIGHT);
+    let histogram_buckets = raw
+        .histogram_buckets
+        .map(parse_histogram_buckets)
+        .transpose()?;
     Ok(Config {
         listen_addr,
         api_keys,
         langs,
         max_inflight,
+        histogram_buckets,
     })
 }
 
@@ -156,6 +166,45 @@ fn parse_api_keys(src: Option<StringOrList>) -> Result<Vec<Vec<u8>>, ConfigError
         return Err(ConfigError::NoApiKeys);
     }
     Ok(keys)
+}
+
+/// `BWS_HISTOGRAM_BUCKETS` parser per DESIGN §Metrics contract. Rules enforced
+/// here match IMPLEMENTATION_PLAN M6 item 1: non-float entries, non-ascending
+/// order, and empty lists are all fatal startup errors.
+fn parse_histogram_buckets(src: StringOrList) -> Result<Vec<f64>, ConfigError> {
+    let mut out: Vec<f64> = Vec::new();
+    for raw in src.into_vec() {
+        let s = raw.trim();
+        if s.is_empty() {
+            return Err(ConfigError::Invalid(
+                "BWS_HISTOGRAM_BUCKETS contains an empty entry".to_string(),
+            ));
+        }
+        let v: f64 = s.parse().map_err(|_| {
+            ConfigError::Invalid(format!(
+                "BWS_HISTOGRAM_BUCKETS entry {s:?} is not a valid float"
+            ))
+        })?;
+        if !v.is_finite() {
+            return Err(ConfigError::Invalid(format!(
+                "BWS_HISTOGRAM_BUCKETS entry {s:?} must be finite"
+            )));
+        }
+        if let Some(prev) = out.last() {
+            if v <= *prev {
+                return Err(ConfigError::Invalid(format!(
+                    "BWS_HISTOGRAM_BUCKETS must be strictly ascending; {v} not greater than {prev}"
+                )));
+            }
+        }
+        out.push(v);
+    }
+    if out.is_empty() {
+        return Err(ConfigError::Invalid(
+            "BWS_HISTOGRAM_BUCKETS must contain at least one entry".to_string(),
+        ));
+    }
+    Ok(out)
 }
 
 fn parse_langs(src: StringOrList) -> Result<Vec<String>, ConfigError> {
@@ -311,6 +360,68 @@ mod tests {
             assert_eq!(cfg.listen_addr, DEFAULT_LISTEN_ADDR);
             Ok(())
         });
+    }
+
+    #[test]
+    fn histogram_buckets_ascending_csv_accepted() {
+        let raw = RawConfig {
+            api_keys: Some(StringOrList::Csv(
+                "k-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            )),
+            histogram_buckets: Some(StringOrList::Csv("0.001, 0.005, 0.01, 0.1".into())),
+            ..Default::default()
+        };
+        let cfg = assemble(raw).unwrap();
+        assert_eq!(
+            cfg.histogram_buckets.unwrap(),
+            vec![0.001, 0.005, 0.01, 0.1]
+        );
+    }
+
+    #[test]
+    fn histogram_buckets_non_float_is_fatal() {
+        let raw = RawConfig {
+            api_keys: Some(StringOrList::Csv(
+                "k-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            )),
+            histogram_buckets: Some(StringOrList::Csv("0.001,oops,0.1".into())),
+            ..Default::default()
+        };
+        assert!(matches!(
+            assemble(raw).unwrap_err(),
+            ConfigError::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn histogram_buckets_non_ascending_is_fatal() {
+        let raw = RawConfig {
+            api_keys: Some(StringOrList::Csv(
+                "k-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            )),
+            histogram_buckets: Some(StringOrList::Csv("0.01, 0.005".into())),
+            ..Default::default()
+        };
+        assert!(matches!(
+            assemble(raw).unwrap_err(),
+            ConfigError::Invalid(_)
+        ));
+    }
+
+    #[test]
+    fn histogram_buckets_empty_is_fatal() {
+        // Empty CSV yields one empty entry.
+        let raw = RawConfig {
+            api_keys: Some(StringOrList::Csv(
+                "k-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+            )),
+            histogram_buckets: Some(StringOrList::Csv("".into())),
+            ..Default::default()
+        };
+        assert!(matches!(
+            assemble(raw).unwrap_err(),
+            ConfigError::Invalid(_)
+        ));
     }
 
     #[test]

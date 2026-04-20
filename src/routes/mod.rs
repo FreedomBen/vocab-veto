@@ -17,11 +17,13 @@ use tower_http::trace::TraceLayer;
 use crate::auth::require_bearer;
 use crate::error::ApiError;
 use crate::limits::gate as inflight_gate;
+use crate::observability::red_layer;
 use crate::state::AppState;
 
 pub mod check;
 pub mod health;
 pub mod languages;
+pub mod metrics;
 
 const RAW_BODY_LIMIT_BYTES: usize = 64 * 1024;
 
@@ -56,11 +58,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     let unauth: Router<Arc<AppState>> = Router::new()
         .route("/healthz", get(health::healthz))
-        .route("/readyz", get(health::readyz));
+        .route("/readyz", get(health::readyz))
+        .route("/metrics", get(metrics::metrics));
 
+    // The RED layer sits *above* auth so fast-path 401s still count into
+    // `bws_requests_total{status="4xx"}` and `bws_request_duration_seconds`,
+    // per DESIGN §Metrics contract and IMPLEMENTATION_PLAN M6 item 1.
     Router::new()
         .merge(v1)
         .merge(unauth)
+        .layer(from_fn(red_layer))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

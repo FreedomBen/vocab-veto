@@ -5,13 +5,20 @@ use std::sync::Arc;
 use banned_words_service::build_router;
 use banned_words_service::config::load;
 use banned_words_service::matcher::{resolve_loaded_langs, Engine, Lang, LIST_VERSION, TERMS};
+use banned_words_service::observability;
 use banned_words_service::state::AppState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    init_tracing();
+    observability::init_tracing();
 
     let cfg = load().inspect_err(|e| eprintln!("config error: {e}"))?;
+
+    // Install the Prometheus recorder before touching any `metrics!` macro so
+    // startup gauges land in a registered registry. The recorder is global —
+    // installing once per process is correct.
+    let prom_handle = observability::install_recorder(cfg.histogram_buckets.as_deref())
+        .inspect_err(|e| eprintln!("metrics recorder error: {e}"))?;
 
     // BWS_LANGS may gate loading to a subset; unset ⇒ every compiled code.
     // Unknown codes are a fatal startup error per IMPLEMENTATION_PLAN M4 item 4.
@@ -35,7 +42,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ready: AtomicBool::new(false),
         max_inflight: cfg.max_inflight,
         inflight: Arc::new(AtomicUsize::new(0)),
+        metrics: Some(prom_handle),
     });
+    observability::record_startup(LIST_VERSION, loaded.len(), cfg.max_inflight);
     state.ready.store(true, Ordering::Release);
 
     let router = build_router(state);
@@ -57,13 +66,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
-}
-
-fn init_tracing() {
-    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt::layer().json())
-        .init();
 }

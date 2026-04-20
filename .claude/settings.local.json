@@ -16,7 +16,12 @@
       "Bash(cargo clippy *)",
       "Bash(cargo fmt *)",
       "Bash(cargo check *)",
-      "mcp__plugin_context-mode_context-mode__ctx_execute"
+      "mcp__plugin_context-mode_context-mode__ctx_execute",
+      "Bash(ls me/tr/metrics me/tr/metrics-exporter-prometheus ax/um/axum-prometheus)",
+      "Bash(find . -maxdepth 4 -type f \\\\\\( -name \"axum-prometheus\" -o -name \"metrics\" -o -name \"metrics-exporter-prometheus\" \\\\\\))",
+      "Bash(grep -E \"\\(metrics$|metrics-exporter-prometheus$|axum-prometheus$\\)\")",
+      "Bash(cargo add *)",
+      "Bash(xargs -I{} grep -l AppState {})"
     ]
   }
 }

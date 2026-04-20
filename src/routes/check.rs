@@ -13,6 +13,7 @@ use axum::Json;
 use crate::error::ApiError;
 use crate::matcher::{Mode, NormalizeError};
 use crate::model::{CheckRequest, CheckResponse, MatchDto};
+use crate::observability::{M_INPUT_BYTES, M_MATCHES_PER_REQUEST, M_TRUNCATED_TOTAL};
 use crate::state::AppState;
 
 pub async fn check(State(state): State<Arc<AppState>>, req: Request) -> Result<Response, ApiError> {
@@ -37,6 +38,11 @@ pub async fn check(State(state): State<Arc<AppState>>, req: Request) -> Result<R
     if text.is_empty() {
         return Err(ApiError::EmptyText);
     }
+
+    // Observe raw input size. Recording *after* the empty-text guard keeps the
+    // zero-length bucket out of the histogram; pre-validation traffic is not
+    // what "input size distribution" is meant to characterize.
+    metrics::histogram!(M_INPUT_BYTES).record(text.len() as f64);
 
     let mode_resolved: Option<Mode> = match mode.as_deref() {
         None => None,
@@ -86,6 +92,11 @@ pub async fn check(State(state): State<Arc<AppState>>, req: Request) -> Result<R
             end: m.end,
         })
         .collect();
+
+    metrics::histogram!(M_MATCHES_PER_REQUEST).record(matches.len() as f64);
+    if result.truncated {
+        metrics::counter!(M_TRUNCATED_TOTAL).increment(1);
+    }
 
     let resp = CheckResponse {
         list_version: state.list_version,

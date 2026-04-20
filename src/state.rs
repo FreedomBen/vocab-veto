@@ -4,6 +4,8 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
+use metrics_exporter_prometheus::PrometheusHandle;
+
 use crate::matcher::Engine;
 
 pub struct AppState {
@@ -21,7 +23,10 @@ pub struct AppState {
     /// middleware mounted on `/v1/check`.
     pub max_inflight: usize,
     /// Live count of requests currently executing the `/v1/check` handler.
-    /// `Arc<AtomicUsize>` so the gate and the M6 `bws_inflight` gauge share a
+    /// `Arc<AtomicUsize>` so the gate and the `bws_inflight` gauge share a
     /// single cell without touching the whole `AppState`.
     pub inflight: Arc<AtomicUsize>,
+    /// Prometheus scrape handle installed at startup. `None` in tests that
+    /// don't exercise `/metrics`; `main` always supplies one.
+    pub metrics: Option<PrometheusHandle>,
 }

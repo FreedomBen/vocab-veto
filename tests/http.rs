@@ -28,6 +28,7 @@ fn test_state() -> Arc<AppState> {
         ready: AtomicBool::new(true),
         max_inflight: 1024,
         inflight: Arc::new(AtomicUsize::new(0)),
+        metrics: None,
     })
 }
 
@@ -46,6 +47,7 @@ fn multi_lang_state() -> Arc<AppState> {
         ready: AtomicBool::new(true),
         max_inflight: 1024,
         inflight: Arc::new(AtomicUsize::new(0)),
+        metrics: None,
     })
 }
 
@@ -64,6 +66,7 @@ fn saturated_state() -> Arc<AppState> {
         ready: AtomicBool::new(true),
         max_inflight: max,
         inflight: Arc::new(AtomicUsize::new(max)),
+        metrics: None,
     })
 }
 

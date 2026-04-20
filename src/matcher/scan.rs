@@ -3,12 +3,14 @@
 //! automaton, per DESIGN §"Matching semantics" and IMPLEMENTATION_PLAN M2.
 
 use std::collections::HashMap;
+use std::time::Instant;
 
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 
 use crate::matcher::boundary::is_word_boundary;
 use crate::matcher::normalize::{normalize, NormalizeError};
 use crate::matcher::{Lang, DEFAULT_MODE};
+use crate::observability::M_MATCH_DURATION;
 
 /// Maximum matches returned per request, per DESIGN §"POST /v1/check" and
 /// IMPLEMENTATION_PLAN M2 item 3.
@@ -95,6 +97,12 @@ impl Engine {
                 continue;
             };
 
+            // Per-language timer: covers the Aho-Corasick scan plus the
+            // post-match boundary filter for strict mode, per DESIGN
+            // §"Metrics contract" ("isolates the hot path from HTTP/JSON
+            // overhead"). Recorded regardless of whether the 256-cap trips.
+            let lang_scan_start = Instant::now();
+
             for hit in ac.find_iter(&norm.text) {
                 let n_start = hit.start();
                 let n_end = hit.end();
@@ -111,6 +119,7 @@ impl Engine {
 
                 if matches.len() == MAX_MATCHES {
                     truncated = true;
+                    record_lang_scan(lang, m, lang_scan_start);
                     break 'outer;
                 }
 
@@ -122,6 +131,8 @@ impl Engine {
                     end,
                 });
             }
+
+            record_lang_scan(lang, m, lang_scan_start);
         }
 
         Ok(ScanResult {
@@ -158,6 +169,20 @@ fn widen_to_source(
 /// M3 populates every loaded language.
 fn resolve_default_mode(lang: &str) -> Mode {
     DEFAULT_MODE.get(lang).copied().unwrap_or(Mode::Substring)
+}
+
+/// Record the per-language scan duration histogram. Cloning the `Lang` into an
+/// owned String is the cheapest way to give `metrics::histogram!` an owned
+/// label value; the short-lived allocation is swallowed by the existing
+/// per-request budget.
+fn record_lang_scan(lang: &Lang, mode: Mode, start: Instant) {
+    let elapsed = start.elapsed().as_secs_f64();
+    metrics::histogram!(
+        M_MATCH_DURATION,
+        "lang" => lang.clone(),
+        "mode" => mode.as_wire_str(),
+    )
+    .record(elapsed);
 }
 
 #[cfg(test)]
