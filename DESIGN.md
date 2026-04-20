@@ -15,7 +15,7 @@ Target: p99 latency < 1 ms for a 1 KiB reference input on a single core; tens of
 
 1. **Fully stateless, zero external dependencies.** No database, no Redis, no disk reads on the hot path. The entire word list is compiled into the binary via `build.rs` and loaded into Aho-Corasick automatons at startup. Pods are fungible — kill one, start another, identical state in milliseconds. Horizontal scaling is `replicas: N`.
 2. **Immutable at runtime.** The word list only changes via redeploy. The image tag *is* the list version. This keeps the hot path lock-free and makes the running version trivially auditable.
-3. **Hot path is allocation-free.** One `Arc<AhoCorasick>` per language, shared across all request tasks. No per-request automaton construction, no per-request heap churn beyond the match buffer.
+3. **Hot path allocations are bounded.** One `Arc<AhoCorasick>` per language, shared across all request tasks. No per-request automaton construction. Per-request allocations are limited to JSON parser buffers, one offset map (`Vec<u32>` sized to the normalized text), and up to 256 short `String`s for `matched_text`. No unbounded or list-size-dependent allocation on the hot path.
 4. **Sensible defaults, explicit overrides.** Callers can send just `{"text": "..."}` and get a correct answer. Power users can pin `langs` and `mode` per request.
 
 ## Tech stack
@@ -36,7 +36,7 @@ Target: p99 latency < 1 ms for a 1 KiB reference input on a single core; tens of
 
 LDNOOBW ships one file per language (e.g. `en`, `es`, `fr`, `de`, `ja`, …). At build time we:
 
-1. Vendor the repo as a git submodule or download pinned by commit SHA.
+1. Vendor the repo as a git submodule pinned at a specific commit SHA. That SHA is the authoritative list version surfaced via `X-List-Version`, `/readyz`, and the `bws_list_version_info` metric; reproducible builds depend on it.
 2. Generate a `phf`-backed map `lang -> &[&str]` via `build.rs` (compile-time, zero-alloc lookup into the term tables).
 3. At startup, build one `AhoCorasick` automaton per language and store them in an `Arc<HashMap<Lang, AhoCorasick>>`. The automaton map uses `HashMap` rather than `phf` because `AhoCorasick` is not const-constructible; it is populated once at startup and read-only thereafter. Automatons are immutable and shared across all request tasks.
 
@@ -51,7 +51,7 @@ Both **strict** (whole-word) and **substring** matching are first-class in v1. C
 - **`mode: "substring"`.** Any Aho-Corasick hit counts. Appropriate for CJK (UAX #29 word boundaries are unreliable there) and for callers who explicitly want aggressive matching.
 - **Per-language default** (applied when `mode` is omitted): `strict` for space-delimited languages (en, es, fr, de, pt, it, nl, ru, …); `substring` for CJK (ja, zh, ko). The mode chosen per language is echoed back in `mode_used` so callers can audit.
 - **Span semantics.** Match `start`/`end` are byte offsets into the caller's **original** request text, suitable for direct slicing (`text[start:end]`) for redaction or highlighting. The normalizer maintains an offset map alongside the normalized buffer in a single pass, and matches are translated back before serialization. Cost: one extra `Vec<u32>` allocation per request, dwarfed by JSON parsing.
-- **Mapping across NFKC expansions.** When one source codepoint expands to multiple normalized codepoints (ligatures like `ﬁ` → `fi`, compatibility forms, fullwidth letters), a match covering any portion of the expanded output maps back to the **entire source codepoint's byte range**. This is intentionally conservative: it guarantees `text[start:end]` always contains the offending content in full, at the cost of occasionally widening the reported span beyond the minimum. Spans are always on UTF-8 codepoint boundaries in the original text.
+- **Mapping across NFKC expansions.** When one source codepoint expands to multiple normalized codepoints (ligatures like `ﬁ` → `fi`, compatibility forms, fullwidth letters), a match covering any portion of the expanded output maps back to the **entire source codepoint's byte range**. For matches spanning multiple source codepoints, widening applies independently at each edge: the reported span is `[start-byte of the first source codepoint any part of whose expansion is touched, end-byte of the last such source codepoint]`. This is intentionally conservative: it guarantees `text[start:end]` always contains the offending content in full, at the cost of occasionally widening the reported span beyond the minimum. Spans are always on UTF-8 codepoint boundaries in the original text.
 
 Both modes share the same automaton; the difference is a post-match boundary check, so there is no meaningful perf gap between them.
 
@@ -101,7 +101,7 @@ Success response (200):
 ```
 
 - Each match carries both `term` — the canonical dictionary entry from LDNOOBW, stable across requests and useful for grouping, metrics, and deduplication — and `matched_text`, the exact slice of the caller's **original** input (`text[start:end]`). The two differ after NFKC folding and case folding: e.g. a term listed as `idiot` may surface with `matched_text: "Ｉｄｉｏｔ"`. `term` is a `&'static str` from the compiled table (zero cost); `matched_text` is a short heap allocation per match and is bounded by the 256-match cap.
-- When `banned: false`, `matches` is `[]`. `mode_used` is always populated with an entry for every requested (or defaulted) language.
+- When `banned: false`, `matches` is `[]`. On any 200 response, `mode_used` is populated with an entry for every requested (or defaulted) language; error responses (4xx/5xx) use the `{error, message}` shape and do not carry `mode_used`.
 - Every `/v1/check` response — success or error — carries an `X-List-Version: <LDNOOBW commit SHA>` header. This lets each decision be audited against a specific list version without a round trip to `/readyz`, and survives proxies that rewrite bodies.
 - Matches are returned in leftmost-longest, non-overlapping order, capped at the **first 256 per request in that order**. If more were found, `truncated` is `true` and the caller knows the response is a prefix of the full match list. This bounds response size on pathological input.
 
@@ -119,11 +119,12 @@ Error response (4xx):
 | 422  | `invalid_mode`      | `mode` is present but not in the enum.                       |
 | 422  | `unknown_language`  | A `langs` entry is not a loaded language code.               |
 | 422  | `empty_langs`       | `langs` is present but empty (`[]`).                         |
+| 500  | `internal`          | Unexpected server error. `message` is a short, fixed string; diagnostic detail goes to structured logs, never the response body. |
 
 ### Other endpoints
 
 - `GET /healthz` — liveness.
-- `GET /readyz` — readiness (automatons loaded). Response body is `{ "ready": true, "list_version": "<LDNOOBW commit SHA>", "languages": N }` so operators and callers can audit the exact list version the running binary was built against.
+- `GET /readyz` — readiness. Returns **200** with `{ "ready": true, "list_version": "<LDNOOBW commit SHA>", "languages": N }` once all automatons are built; returns **503** with `{ "ready": false }` during the startup window before automatons are live. The HTTP listener is bound only after automatons finish loading, so in practice the 503 state is observable only by a sidecar that races startup. The body lets operators and callers audit the exact list version the running binary was built against.
 - `GET /metrics` — Prometheus scrape.
 - `GET /v1/languages` — list of loaded language codes and each one's default mode.
 
@@ -136,11 +137,11 @@ Error response (4xx):
 | `bws_requests_total`           | counter   | `status` (2xx / 4xx / 5xx) | Request rate and error ratio — the R and E of RED.                     |
 | `bws_auth_failures_total`      | counter   | `reason` (missing / invalid) | Auth rejection rate; a sudden spike indicates a rotated key or probing. |
 | `bws_request_duration_seconds` | histogram | `status`                 | End-to-end latency including JSON parse and serialize.                   |
-| `bws_match_duration_seconds`   | histogram | `lang`, `mode`           | Aho-Corasick scan time per (lang, mode); isolates the hot path from HTTP/JSON overhead. |
+| `bws_match_duration_seconds`   | histogram | `lang`, `mode`           | Aho-Corasick scan time per (lang, mode), observed once per scanned language per request; isolates the hot path from HTTP/JSON overhead. |
 | `bws_matches_per_request`      | histogram | —                        | Distribution of match counts per request; informs tuning of the 256 cap. |
 | `bws_truncated_total`          | counter   | —                        | Count of responses with `truncated: true`; expected rare, alert-worthy if not. |
 | `bws_input_bytes`              | histogram | —                        | Distribution of `text` lengths in bytes; detects outlier traffic.        |
-| `bws_list_version_info`        | gauge     | `sha`                    | Constant 1; lets dashboards and alerts pivot on list version across a pod fleet. |
+| `bws_list_version_info`        | gauge     | `list_version`           | Constant 1; lets dashboards and alerts pivot on list version across a pod fleet. Label value is the same LDNOOBW commit SHA surfaced in `X-List-Version` and `/readyz`. |
 | `bws_languages_loaded`         | gauge     | —                        | Count of automatons live after startup; sanity check for `BWS_LANGS`.    |
 
 Histogram buckets default to the `axum-prometheus` preset tuned for sub-millisecond latency; override via env for deployments with different SLO targets.
@@ -177,7 +178,7 @@ The service authenticates every `/v1/*` request against the key set in `BWS_API_
 - **401 fast path.** Missing or invalid keys are rejected before body parse, so unauthenticated traffic cannot force the service to allocate a parser or run a scan.
 - **64 KiB request body cap** — 413 above that.
 - **256-match response cap** — `truncated: true` above that.
-- **Bounded per-request work.** The Aho-Corasick scan is O(n) in input length with a constant factor independent of list size; no input can force superlinear CPU or memory.
+- **Bounded per-request work.** The Aho-Corasick scan is O(n) in input length with a constant factor independent of list size; no input can force superlinear CPU or memory. The 256-match cap bounds response size and per-match allocations, not scan cost — the scan always traverses the full input regardless of how many hits it produces.
 - **Constant-time key comparison** and **hash-prefix-only logging** prevent key-material leaks via timing or log exfiltration.
 
 If the service is ever exposed directly to the public internet, a gateway-level rate limit and request-size policy must still be added — the API key alone does not defend against a credentialed abuser. Multi-tenant rate limiting is deferred to v2 and is expected to live in the gateway regardless (see below).
