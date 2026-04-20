@@ -57,6 +57,18 @@ Both modes share the same automaton; the difference is a post-match boundary che
 
 ## API
 
+### Authentication
+
+All `/v1/*` endpoints require an API key presented as:
+
+```
+Authorization: Bearer <api-key>
+```
+
+Keys are compared in constant time against the set configured via `BWS_API_KEYS` (see Deployment). Missing or unrecognized keys return **401 `unauthorized`** before any body parse or matching work — unauthenticated traffic pays ~zero CPU. `/healthz`, `/readyz`, and `/metrics` are deliberately **not** auth-gated so Kubernetes probes and Prometheus scrapers work without key provisioning; those endpoints should be reachable only from the cluster/pod network.
+
+Request logs record only `key_id` — the first 8 hex characters of the key's SHA-256 — never the key itself. This is enough to correlate traffic to a specific caller and to track rotation without leaking secrets into log aggregation.
+
 ### POST /v1/check
 
 Request body (JSON, max 64 KiB — 413 `payload_too_large` above that):
@@ -99,13 +111,14 @@ Error response (4xx):
 { "error": "invalid_mode", "message": "mode must be 'strict' or 'substring'" }
 ```
 
-| HTTP | `error`             | Condition                                         |
-| ---- | ------------------- | ------------------------------------------------- |
-| 400  | `bad_request`       | Malformed JSON, or missing/empty `text`.          |
-| 413  | `payload_too_large` | Request body exceeds 64 KiB.                      |
-| 422  | `invalid_mode`      | `mode` is present but not in the enum.            |
-| 422  | `unknown_language`  | A `langs` entry is not a loaded language code.    |
-| 422  | `empty_langs`       | `langs` is present but empty (`[]`).              |
+| HTTP | `error`             | Condition                                                    |
+| ---- | ------------------- | ------------------------------------------------------------ |
+| 401  | `unauthorized`      | Missing `Authorization` header, or key not in `BWS_API_KEYS`. |
+| 400  | `bad_request`       | Malformed JSON, or missing/empty `text`.                     |
+| 413  | `payload_too_large` | Request body exceeds 64 KiB.                                 |
+| 422  | `invalid_mode`      | `mode` is present but not in the enum.                       |
+| 422  | `unknown_language`  | A `langs` entry is not a loaded language code.               |
+| 422  | `empty_langs`       | `langs` is present but empty (`[]`).                         |
 
 ### Other endpoints
 
@@ -121,6 +134,7 @@ Error response (4xx):
 | Metric                         | Type      | Labels                   | Purpose                                                                  |
 | ------------------------------ | --------- | ------------------------ | ------------------------------------------------------------------------ |
 | `bws_requests_total`           | counter   | `status` (2xx / 4xx / 5xx) | Request rate and error ratio — the R and E of RED.                     |
+| `bws_auth_failures_total`      | counter   | `reason` (missing / invalid) | Auth rejection rate; a sudden spike indicates a rotated key or probing. |
 | `bws_request_duration_seconds` | histogram | `status`                 | End-to-end latency including JSON parse and serialize.                   |
 | `bws_match_duration_seconds`   | histogram | `lang`, `mode`           | Aho-Corasick scan time per (lang, mode); isolates the hot path from HTTP/JSON overhead. |
 | `bws_matches_per_request`      | histogram | —                        | Distribution of match counts per request; informs tuning of the 256 cap. |
@@ -149,19 +163,24 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 - Container image built via `cargo chef` for fast layer caching.
 - Config via env vars:
   - `BWS_LISTEN_ADDR` — HTTP listen address (e.g. `0.0.0.0:8080`).
+  - `BWS_API_KEYS` — **required**, comma-separated list of accepted API keys (e.g. `k_prod_ab12…,k_prod_cd34…`). If unset or empty, the service **refuses to start** with a clear error — there is no open/anonymous mode. Keys should be ≥32 bytes of cryptographically random data; the service warns (does not reject) on shorter keys so legacy tokens can be rotated in gracefully. Rotation: redeploy with the union of old + new keys, wait for callers to cut over, then redeploy with only the new set — no hot reload.
   - `BWS_LANGS` — optional comma-separated runtime allowlist (e.g. `en,es,fr`). Defaults to every language compiled into the binary. Useful for slimming a single fat image down to a specific deployment's needs without rebuilding. A code not compiled into the binary is a **fatal startup error** (`unknown language in BWS_LANGS: xx; compiled: ...`); silent drops would mask deploy-config typos and let a pod come up serving fewer languages than the operator intended.
   - *(No `BWS_DEFAULT_MODE` — mode defaulting is per-language and defined in code, not config, so behavior is identical across deployments.)*
 - **List updates ship via redeploy.** No hot reload, ever — it keeps the hot path lock-free and makes the running version trivially auditable (image tag = list version).
 
 ## Threat model and abuse posture
 
-The service assumes it is deployed behind an authenticated API gateway or inside a trusted internal network. It does **not** perform authentication, per-caller rate limiting, request signing, or quota enforcement. The only in-process defenses against abusive traffic are:
+The service authenticates every `/v1/*` request against the key set in `BWS_API_KEYS` (see "Authentication" under API). It does **not** perform per-caller rate limiting, quotas, or request signing beyond that — those belong in the gateway. It is expected to sit behind an authenticated gateway or inside a trusted internal network; the API key is a second line of defense, not the only one.
 
+**In-process defenses:**
+
+- **401 fast path.** Missing or invalid keys are rejected before body parse, so unauthenticated traffic cannot force the service to allocate a parser or run a scan.
 - **64 KiB request body cap** — 413 above that.
 - **256-match response cap** — `truncated: true` above that.
 - **Bounded per-request work.** The Aho-Corasick scan is O(n) in input length with a constant factor independent of list size; no input can force superlinear CPU or memory.
+- **Constant-time key comparison** and **hash-prefix-only logging** prevent key-material leaks via timing or log exfiltration.
 
-If the service is ever exposed directly to the public internet, a gateway-level rate limit and request-size policy must be added first. Multi-tenant rate limiting is deferred to v2 and is expected to live in the gateway regardless (see below).
+If the service is ever exposed directly to the public internet, a gateway-level rate limit and request-size policy must still be added — the API key alone does not defend against a credentialed abuser. Multi-tenant rate limiting is deferred to v2 and is expected to live in the gateway regardless (see below).
 
 ## Deferred to v2
 
