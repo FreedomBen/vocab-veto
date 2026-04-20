@@ -1,4 +1,4 @@
-include!(concat!(env!("OUT_DIR"), "/generated_terms.rs"));
+use banned_words_service::matcher::{LIST_VERSION, TERMS};
 
 fn main() {
     println!("LIST_VERSION = {LIST_VERSION}");

@@ -10,7 +10,11 @@
       "Bash(cargo init *)",
       "Bash(git submodule *)",
       "Bash(cargo build *)",
-      "Bash(cargo run *)"
+      "Bash(cargo run *)",
+      "Bash(cargo test *)",
+      "Bash(cargo bench *)",
+      "Bash(cargo clippy *)",
+      "Bash(cargo fmt *)"
     ]
   }
 }

@@ -14,12 +14,7 @@ const ALLOWLIST: &[&str] = &[
     "kab", "ko", "nl", "no", "pl", "pt", "ru", "sv", "th", "tlh", "tr", "zh",
 ];
 
-const SKIP_LIST: &[&str] = &[
-    "fr-CA-u-sd-caqc",
-    "LICENSE",
-    "README.md",
-    "USERS.md",
-];
+const SKIP_LIST: &[&str] = &["fr-CA-u-sd-caqc", "LICENSE", "README.md", "USERS.md"];
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -157,6 +152,5 @@ fn emit(sha: &str, terms: &[(String, Vec<String>)]) {
     }
     writeln!(s, "}};").unwrap();
 
-    fs::write(&out_path, s)
-        .unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
+    fs::write(&out_path, s).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
 }
