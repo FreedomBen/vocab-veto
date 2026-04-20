@@ -1,0 +1,20 @@
+# ClusterIP-only service. v1 is in-cluster only (DESIGN §"Kubernetes
+# deployment (DOKS)"). Consumers reach it at
+#   banned-words-service.<namespace>.svc.cluster.local:8080
+# Public exposure (behind a rate-limiting gateway / WAF) is deferred to v2.
+apiVersion: v1
+kind: Service
+metadata:
+  name: banned-words-service
+  labels:
+    app.kubernetes.io/name: banned-words-service
+    app.kubernetes.io/part-of: vocab-veto
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: banned-words-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

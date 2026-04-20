@@ -1,0 +1,91 @@
+# Deployment for Vocab Veto / banned-words-service.
+#
+# - Non-root, read-only root filesystem, all capabilities dropped, seccomp
+#   RuntimeDefault (matches DESIGN §"Pod security context").
+# - Probes hit /healthz and /readyz on the same container port. Both are
+#   unauthenticated by design (DESIGN §Authentication).
+# - image is intentionally a placeholder; set via kustomize overlay, `kubectl
+#   set image`, or your deploy pipeline. The image tag is the LDNOOBW SHA so a
+#   running pod's list version is trivially auditable.
+# - Resource requests/limits are placeholders until the M8 load-test data is
+#   in. Memory is bounded by BWS_MAX_INFLIGHT × ~256 KiB worst case.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: banned-words-service
+  labels:
+    app.kubernetes.io/name: banned-words-service
+    app.kubernetes.io/part-of: vocab-veto
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: banned-words-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: banned-words-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: banned-words-service
+          image: banned-words-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: banned-words-service-config
+            - secretRef:
+                name: banned-words-service-keys
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            timeoutSeconds: 1
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "1000m"
+              memory: "512Mi"

@@ -9,7 +9,8 @@ the binary's stable identity and is unchanged.
 
 ## Status
 
-Pre-code. The authoritative artifacts today are the design docs:
+Under active development. See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)
+for the milestone-by-milestone status. Authoritative documents:
 
 | Document                                             | Purpose                                                                                          |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -17,8 +18,44 @@ Pre-code. The authoritative artifacts today are the design docs:
 | [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)   | Milestone-ordered plan with explicit exit criteria per milestone.                                |
 | [CLAUDE.md](./CLAUDE.md)                             | Agent-facing working notes and cross-cutting invariants.                                         |
 
-Build, test, and lint commands will be added to this README as Milestone 1
-lands them.
+## Build and run
+
+Clone with submodules — the LDNOOBW word list is vendored and the build will
+fail without it:
+
+```sh
+git clone --recurse-submodules <repo-url>
+# or, in an existing checkout:
+git submodule update --init --recursive
+```
+
+All common tasks run through the top-level `Makefile`:
+
+| Target         | What it does                                                        |
+| -------------- | ------------------------------------------------------------------- |
+| `make help`    | List targets (default).                                             |
+| `make build`   | `cargo build --release --locked`.                                   |
+| `make test`    | `cargo test --locked` (unit + integration).                         |
+| `make bench`   | `cargo bench --no-run --locked` (compile-check the criterion suite).|
+| `make lint`    | `cargo fmt --check` + `cargo clippy -- -D warnings`.                |
+| `make docker`  | Build the distroless container image, tagged with the LDNOOBW SHA. |
+| `make run`     | Run locally with a dev-only `BWS_API_KEYS`.                         |
+
+## Configuration
+
+All runtime configuration is via environment variables (`BWS_*`) or an
+optional TOML file. The authoritative list lives in [DESIGN.md §Deployment](./DESIGN.md#deployment);
+the highlights are `BWS_API_KEYS` (required, comma-separated bearer keys),
+`BWS_LANGS` (optional allowlist), `BWS_MAX_INFLIGHT` (default 1024), and
+`BWS_LISTEN_ADDR` (default `0.0.0.0:8080`).
+
+## Deployment
+
+[`deploy/Dockerfile`](./deploy/Dockerfile) produces a `distroless/static:nonroot`
+image via `cargo-chef` + musl. Kubernetes manifests for an in-cluster
+(ClusterIP-only) deployment live under [`deploy/k8s/`](./deploy/k8s/). v1 is
+in-cluster only — there is no Ingress or LoadBalancer; public exposure belongs
+behind a separate gateway and is deferred to v2.
 
 ## What it does (in one paragraph)
 

@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1.7
+#
+# Two-stage build that produces a distroless, non-root, statically-linked image.
+# Target: x86_64-unknown-linux-musl so the final stage can be
+# `gcr.io/distroless/static-debian12:nonroot` (no libc at runtime).
+#
+# cargo-chef precomputes a dependency-only layer so code-only edits do not
+# reinvalidate the dep build. The build.rs in this crate calls
+# `git -C vendor/ldnoobw rev-parse HEAD` to derive LIST_VERSION, so the build
+# image needs `git` and the repo's `.git` directory must be part of the build
+# context (see .dockerignore).
+
+ARG RUST_VERSION=1.94
+ARG DISTROLESS_IMAGE=gcr.io/distroless/static-debian12:nonroot
+
+FROM rust:${RUST_VERSION}-bookworm AS chef
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends musl-tools git ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+RUN rustup target add x86_64-unknown-linux-musl \
+ && cargo install cargo-chef --locked --version ^0.1
+WORKDIR /app
+
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+# Dependency-only compile. build.rs runs during cook against our Cargo.toml,
+# so vendor/ldnoobw and the submodule's git metadata must be present.
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY vendor ./vendor
+COPY .git ./.git
+RUN cargo chef cook \
+      --release \
+      --locked \
+      --target x86_64-unknown-linux-musl \
+      --recipe-path recipe.json
+# Real build. Only source changes invalidate this layer.
+COPY src ./src
+COPY benches ./benches
+RUN cargo build \
+      --release \
+      --locked \
+      --target x86_64-unknown-linux-musl \
+      --bin banned-words-service \
+ && strip /app/target/x86_64-unknown-linux-musl/release/banned-words-service
+
+FROM ${DISTROLESS_IMAGE} AS runtime
+ARG LIST_VERSION=unknown
+ARG REVISION=unknown
+LABEL org.opencontainers.image.title="banned-words-service" \
+      org.opencontainers.image.description="Vocab Veto — stateless multi-language banned-words HTTP service" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.source="https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words" \
+      org.opencontainers.image.revision="${REVISION}" \
+      list_version="${LIST_VERSION}"
+COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/banned-words-service /usr/local/bin/banned-words-service
+USER nonroot:nonroot
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/banned-words-service"]

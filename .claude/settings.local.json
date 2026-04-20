@@ -21,7 +21,8 @@
       "Bash(find . -maxdepth 4 -type f \\\\\\( -name \"axum-prometheus\" -o -name \"metrics\" -o -name \"metrics-exporter-prometheus\" \\\\\\))",
       "Bash(grep -E \"\\(metrics$|metrics-exporter-prometheus$|axum-prometheus$\\)\")",
       "Bash(cargo add *)",
-      "Bash(xargs -I{} grep -l AppState {})"
+      "Bash(xargs -I{} grep -l AppState {})",
+      "Bash(make help *)"
     ]
   }
 }

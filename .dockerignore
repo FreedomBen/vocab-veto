@@ -1,0 +1,7 @@
+# Excluded from Docker build context. Note that .git IS sent on purpose:
+# build.rs derives LIST_VERSION from the vendored LDNOOBW submodule's git
+# metadata, which is stored under .git/modules/vendor/ldnoobw/.
+target/
+TODO.md
+deploy/k8s/
+*.log

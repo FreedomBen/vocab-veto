@@ -1,0 +1,14 @@
+# Non-secret config. BWS_API_KEYS lives in the companion Secret, not here.
+#
+# BWS_LANGS is deliberately omitted — unset = load every compiled language.
+# To restrict, add e.g.  BWS_LANGS: "en,es,fr" .
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: banned-words-service-config
+  labels:
+    app.kubernetes.io/name: banned-words-service
+    app.kubernetes.io/part-of: vocab-veto
+data:
+  BWS_LISTEN_ADDR: "0.0.0.0:8080"
+  BWS_MAX_INFLIGHT: "1024"
