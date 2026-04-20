@@ -1,4 +1,4 @@
-# Banned Words Service — Design
+# Vocab Veto — Design
 
 ## Goal
 

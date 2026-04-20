@@ -1,4 +1,4 @@
-# Banned Words Service — Implementation Plan
+# Vocab Veto — Implementation Plan
 
 A concrete, milestone-ordered plan for building the service specified in [DESIGN.md](./DESIGN.md). Each milestone is independently shippable and verifiable.
 

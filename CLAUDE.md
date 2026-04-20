@@ -18,6 +18,8 @@ No `Cargo.toml`, `Makefile`, `Dockerfile`, or source tree exists yet. Build/test
 
 ## What this service is (big-picture)
 
+The project is named **Vocab Veto**. The repo directory and (eventual) crate name remain `banned-words-service` — the product/user-facing name is Vocab Veto; the crate/binary identity and `BWS_*` env-var prefix are unchanged.
+
 A stateless, single-binary Rust HTTP service that answers *"does this string contain a banned word?"* across many languages, backed by `aho-corasick` automatons built from the LDNOOBW list. The entire list is compiled into the binary at build time; there is no hot reload, no database, no external state. The image tag is the list version.
 
 Key cross-cutting invariants from DESIGN.md that any change should respect:
