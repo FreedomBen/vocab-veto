@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git ls-remote *)"
+      "Bash(git ls-remote *)",
+      "Bash(git -C /home/ben/gitclone/banned-words-service add README.md)",
+      "Bash(git -C /home/ben/gitclone/banned-words-service commit -m \"Add README with project overview and LDNOOBW attribution\")"
     ]
   }
 }
