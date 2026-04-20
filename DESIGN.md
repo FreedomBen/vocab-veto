@@ -66,7 +66,7 @@ All `/v1/*` endpoints require an API key presented as:
 Authorization: Bearer <api-key>
 ```
 
-Keys are compared in constant time against the set configured via `BWS_API_KEYS` (see Deployment). Missing or unrecognized keys return **401 `unauthorized`** before any body parse or matching work — unauthenticated traffic pays ~zero CPU. `/healthz`, `/readyz`, and `/metrics` are deliberately **not** auth-gated so Kubernetes probes and Prometheus scrapers work without key provisioning; those endpoints should be reachable only from the cluster/pod network.
+Each candidate key in `BWS_API_KEYS` is compared to the presented key via `subtle::ConstantTimeEq`; the service iterates the full configured set regardless of where a match occurs, so the loop leaks only the configured key-count via timing, never key material. Missing or unrecognized keys return **401 `unauthorized`** before any body parse or matching work — unauthenticated traffic pays ~zero CPU. `/healthz`, `/readyz`, and `/metrics` are deliberately **not** auth-gated so Kubernetes probes and Prometheus scrapers work without key provisioning; those endpoints should be reachable only from the cluster/pod network.
 
 Request logs record only `key_id` — the first 8 hex characters of the key's SHA-256 — never the key itself. This is enough to correlate traffic to a specific caller and to track rotation without leaking secrets into log aggregation. On 401, logs record only the failure `reason` (`missing` or `invalid`) — never the attempted key nor any hash prefix derived from it, so the endpoint cannot be used as an oracle to probe the key space.
 
@@ -74,7 +74,7 @@ Request logs record only `key_id` — the first 8 hex characters of the key's SH
 
 ### POST /v1/check
 
-Request body (JSON, max 64 KiB — 413 `payload_too_large` above that):
+Request body (JSON, max 64 KiB — 413 `payload_too_large` above that; additionally, inputs whose NFKC-normalized form exceeds 192 KiB are rejected with the same 413, since Unicode compatibility expansion can grow text by up to ~3×):
 
 ```json
 {
@@ -84,7 +84,7 @@ Request body (JSON, max 64 KiB — 413 `payload_too_large` above that):
 }
 ```
 
-- `text` — string, required, non-empty.
+- `text` — string, required. Must be byte-length ≥ 1; whitespace-only is accepted (the emptiness check runs on the raw input before normalization).
 - `langs` — array of loaded language codes, optional. Defaults to every loaded language. Codes are lowercase ASCII (ISO 639-1 where available, e.g. `en`, `ja`); inputs are case-folded before lookup so `"EN"` and `"en"` are equivalent. An empty array (`[]`) is rejected with 422 `empty_langs` — to scan every loaded language, omit the field rather than send `[]`, so the "none" vs. "all" distinction stays explicit.
 - `mode` — `"strict"` | `"substring"`, optional. Omit to apply the per-language default.
 
@@ -103,10 +103,10 @@ Success response (200):
 }
 ```
 
-- Each match carries both `term` — the canonical dictionary entry from LDNOOBW, stable across requests and useful for grouping, metrics, and deduplication — and `matched_text`, the exact slice of the caller's **original** input (`text[start:end]`). The two differ after NFKC folding and case folding: e.g. a term listed as `idiot` may surface with `matched_text: "Ｉｄｉｏｔ"`. `term` is a `&'static str` from the compiled table (zero cost); `matched_text` is a short heap allocation per match and is bounded by the 256-match cap.
+- Each match carries both `term` — the canonical dictionary entry from LDNOOBW, stable across requests and useful for grouping, metrics, and deduplication — and `matched_text`, the exact slice of the caller's **original** input (`text[start:end]`). The two differ after NFKC folding and case folding: e.g. a term listed as `idiot` may surface with `matched_text: "Ｉｄｉｏｔ"`. `term` is a `&'static str` from the compiled table (zero cost); `matched_text` is a short heap allocation per match and is bounded by the 256-match cap. (The `****` placeholders in the example response above are documentation-side redaction, not service behavior — responses always contain the literal matched content.)
 - When `banned: false`, `matches` is `[]`. On any 200 response, `mode_used` is populated with an entry for every requested (or defaulted) language; error responses (4xx/5xx) use the `{error, message}` shape and do not carry `mode_used`.
-- Every `/v1/check` response — success, 4xx (including fast-pathed 401), and 5xx — carries an `X-List-Version: <LDNOOBW commit SHA>` header. This lets each decision be audited against a specific list version without a round trip to `/readyz`, and survives proxies that rewrite bodies. The header is static per process (constant from startup), so attaching it on the 401 fast path is free.
-- **Match ordering.** Within each language, matches are leftmost-longest and non-overlapping. Per-language groups are then concatenated in the order the caller supplied `langs` (or, when `langs` is omitted, the canonical loaded-languages order reported by `/v1/languages`). The final list is capped at the **first 256 in that order**; if more were found, `truncated` is `true` and the response is a strict prefix of the full list. This bounds response size on pathological input and keeps the truncation point deterministic under a fixed request.
+- Every `/v1/*` response — both `/v1/check` and `/v1/languages`, on success, 4xx (including fast-pathed 401), and 5xx — carries an `X-List-Version: <LDNOOBW commit SHA>` header. This lets each decision be audited against a specific list version without a round trip to `/readyz`, and survives proxies that rewrite bodies. The header is static per process (constant from startup), so attaching it on the 401 fast path is free.
+- **Match ordering.** Within each language, matches are leftmost-longest and non-overlapping. Per-language groups are then concatenated in the order the caller supplied `langs` (or, when `langs` is omitted, alphabetical order by ISO code — the same order echoed by `/v1/languages`). All scanned languages contribute their full match set before truncation is applied; the cap does **not** short-circuit the scan. The concatenated list is then capped at the **first 256 in that order**; if more were found, `truncated` is `true` and the response is a strict prefix of the full list. This bounds response size on pathological input and keeps the truncation point deterministic under a fixed request.
 
 Error response (4xx):
 
@@ -117,10 +117,11 @@ Error response (4xx):
 | HTTP | `error`             | Condition                                                    |
 | ---- | ------------------- | ------------------------------------------------------------ |
 | 401  | `unauthorized`      | Missing `Authorization` header, or key not in `BWS_API_KEYS`. |
-| 400  | `bad_request`       | Malformed JSON, or missing/empty `text`.                     |
+| 400  | `bad_request`       | Malformed JSON, or `text` field missing entirely.            |
 | 413  | `payload_too_large` | Request body exceeds 64 KiB.                                 |
 | 422  | `invalid_mode`      | `mode` is present but not in the enum.                       |
 | 422  | `unknown_language`  | A `langs` entry is not a loaded language code.               |
+| 422  | `empty_text`        | `text` is present but empty (`""`).                          |
 | 422  | `empty_langs`       | `langs` is present but empty (`[]`).                         |
 | 500  | `internal`          | Unexpected server error. `message` is a short, fixed string; diagnostic detail goes to structured logs, never the response body. |
 | 503  | `overloaded`        | In-flight request count is at `BWS_MAX_INFLIGHT`. Backpressure signal; retry with jitter. |
@@ -130,22 +131,32 @@ Error response (4xx):
 - `GET /healthz` — liveness.
 - `GET /readyz` — readiness. Returns **200** with `{ "ready": true, "list_version": "<LDNOOBW commit SHA>", "languages": N }` once all automatons are built; returns **503** with `{ "ready": false }` during the startup window before automatons are live. The HTTP listener is bound only after automatons finish loading, so in practice the 503 state is observable only by a sidecar that races startup. The body lets operators and callers audit the exact list version the running binary was built against.
 - `GET /metrics` — Prometheus scrape.
-- `GET /v1/languages` — list of loaded language codes and each one's default mode.
+- `GET /v1/languages` — list of loaded language codes and each one's default mode, in alphabetical order by ISO code. This is the canonical order used for match concatenation when `langs` is omitted on `/v1/check`.
+
+  ```json
+  {
+    "languages": [
+      { "code": "de", "default_mode": "strict" },
+      { "code": "en", "default_mode": "strict" },
+      { "code": "ja", "default_mode": "substring" }
+    ]
+  }
+  ```
 
 ### Metrics contract
 
-`/metrics` exposes the Prometheus series below. Label cardinality is bounded by (languages loaded × mode × status), so total series count stays in the low hundreds across a realistic deployment.
+`/metrics` exposes the Prometheus series below. Label cardinality is bounded by (languages loaded × mode × status × endpoint) across metrics, so total series count stays in the low hundreds across a realistic deployment.
 
 | Metric                         | Type      | Labels                   | Purpose                                                                  |
 | ------------------------------ | --------- | ------------------------ | ------------------------------------------------------------------------ |
-| `bws_requests_total`           | counter   | `status` (2xx / 4xx / 5xx) | Request rate and error ratio — the R and E of RED.                     |
+| `bws_requests_total`           | counter   | `status` (2xx / 4xx / 5xx) | Request rate and error ratio — the R and E of RED. Fast-pathed 401s increment this under `status="4xx"` in addition to `bws_auth_failures_total`. |
 | `bws_auth_failures_total`      | counter   | `reason` (missing / invalid) | Auth rejection rate; a sudden spike indicates a rotated key or probing. |
-| `bws_request_duration_seconds` | histogram | `status`                 | End-to-end latency including JSON parse and serialize.                   |
+| `bws_request_duration_seconds` | histogram | `status`, `endpoint`     | End-to-end latency including JSON parse and serialize. `endpoint` is one of `/v1/check`, `/v1/languages`, `/healthz`, `/readyz`, `/metrics`; fast-pathed 401s are recorded here too. |
 | `bws_match_duration_seconds`   | histogram | `lang`, `mode`           | Aho-Corasick scan time per (lang, mode), observed once per scanned language per request; isolates the hot path from HTTP/JSON overhead. |
 | `bws_matches_per_request`      | histogram | —                        | Distribution of match counts per request; informs tuning of the 256 cap. |
 | `bws_truncated_total`          | counter   | —                        | Count of responses with `truncated: true`; expected rare, alert-worthy if not. |
 | `bws_input_bytes`              | histogram | —                        | Distribution of `text` lengths in bytes; detects outlier traffic.        |
-| `bws_list_version_info`        | gauge     | `list_version`           | Constant 1; lets dashboards and alerts pivot on list version across a pod fleet. Label value is the same LDNOOBW commit SHA surfaced in `X-List-Version` and `/readyz`. |
+| `bws_list_version_info`        | gauge     | `list_version`           | Constant 1; lets dashboards and alerts pivot on list version across a pod fleet. Label value is the same LDNOOBW commit SHA surfaced in `X-List-Version` and `/readyz`. During a rolling deploy this label briefly takes two values (old + new); treat that as expected, not cardinality growth. |
 | `bws_languages_loaded`         | gauge     | —                        | Count of automatons live after startup; sanity check for `BWS_LANGS`.    |
 | `bws_inflight`                 | gauge     | —                        | Current in-flight `/v1/check` request count (counts against `BWS_MAX_INFLIGHT`). Lets dashboards answer "how close are we to the cap?" without inferring it from 503 rates. |
 
@@ -158,6 +169,7 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 ## Performance plan
 
 - Single shared `Arc<AhoCorasick>` per language; no per-request allocation for the automaton.
+- Scan cost scales `O(N_langs × input_len)` — each automaton is scanned independently over the full normalized input. When `langs` is unset, every loaded language is scanned, so callers who know their expected language(s) should specify `langs` explicitly to avoid paying for unused automatons.
 - Automatons built with leftmost-longest, non-overlapping match kind — bounds match cardinality without extra filtering logic.
 - Reuse a `Vec<Match>` buffer per task via a small object pool if profiling shows allocations dominate.
 - Criterion benchmarks committed alongside the code; regressions fail CI.
@@ -169,9 +181,9 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 - Container image built via `cargo chef` for fast layer caching.
 - Config via env vars:
   - `BWS_LISTEN_ADDR` — HTTP listen address (e.g. `0.0.0.0:8080`).
-  - `BWS_API_KEYS` — **required**, comma-separated list of accepted API keys (e.g. `k_prod_ab12…,k_prod_cd34…`). If unset or empty, the service **refuses to start** with a clear error — there is no open/anonymous mode. Keys should be ≥32 bytes of cryptographically random data; the service warns (does not reject) on shorter keys so legacy tokens can be rotated in gracefully. Rotation: redeploy with the union of old + new keys, wait for callers to cut over, then redeploy with only the new set — no hot reload.
+  - `BWS_API_KEYS` — **required**, comma-separated list of accepted API keys (e.g. `k_prod_ab12…,k_prod_cd34…`). Parsing: split on `,`, trim surrounding ASCII whitespace from each entry, reject empty entries, deduplicate. Keys cannot themselves contain `,` — rotate to comma-free keys if the existing set has any. If unset, empty, or if parsing yields zero keys, the service **refuses to start** with a clear error — there is no open/anonymous mode. Keys should be ≥32 bytes of cryptographically random data; the service warns (does not reject) on shorter keys so legacy tokens can be rotated in gracefully. Rotation: redeploy with the union of old + new keys, wait for callers to cut over, then redeploy with only the new set — no hot reload.
   - `BWS_LANGS` — optional comma-separated runtime allowlist (e.g. `en,es,fr`). Defaults to every language compiled into the binary. Useful for slimming a single fat image down to a specific deployment's needs without rebuilding. A code not compiled into the binary is a **fatal startup error** (`unknown language in BWS_LANGS: xx; compiled: ...`); silent drops would mask deploy-config typos and let a pod come up serving fewer languages than the operator intended.
-  - `BWS_MAX_INFLIGHT` — optional cap on concurrent in-flight `/v1/check` requests. Default `1024`. When at capacity, new requests are rejected with **503 `overloaded`** before body parse, bounding worst-case in-flight memory to roughly `BWS_MAX_INFLIGHT × (64 KiB body + offset map)`. This is a liveness safeguard, not a rate limit; callers should retry with jitter. Excluded from the cap: `/healthz`, `/readyz`, `/metrics`, and 401-fast-path rejections (all of which do no bounded-size work).
+  - `BWS_MAX_INFLIGHT` — optional cap on concurrent in-flight `/v1/check` requests. Default `1024`. When at capacity, new requests are rejected with **503 `overloaded`** before body parse, bounding worst-case in-flight memory to roughly `BWS_MAX_INFLIGHT × (64 KiB body + 192 KiB normalized buffer + offset map)` — NFKC compatibility expansion is capped at 3× via the normalized-length check, and requests that would exceed 192 KiB normalized are rejected with 413 before the scan runs. This is a liveness safeguard, not a rate limit; callers should retry with jitter. Excluded from the cap: `/healthz`, `/readyz`, `/metrics`, and 401-fast-path rejections (all of which do no bounded-size work).
   - *(No `BWS_DEFAULT_MODE` — mode defaulting is per-language and defined in code, not config, so behavior is identical across deployments.)*
 - **List updates ship via redeploy.** No hot reload, ever — it keeps the hot path lock-free and makes the running version trivially auditable (image tag = list version).
 
@@ -182,7 +194,7 @@ The service authenticates every `/v1/*` request against the key set in `BWS_API_
 **In-process defenses:**
 
 - **401 fast path.** Missing or invalid keys are rejected before body parse and before the concurrency-cap gate, so unauthenticated traffic cannot force the service to allocate a parser, run a scan, or consume an in-flight slot.
-- **64 KiB request body cap** — 413 above that.
+- **64 KiB raw body cap and 192 KiB NFKC-normalized cap** — 413 above either.
 - **256-match response cap** — `truncated: true` above that.
 - **Concurrency cap** (`BWS_MAX_INFLIGHT`, default 1024) — 503 `overloaded` above that. Bounds worst-case in-flight memory independent of gateway behavior.
 - **Bounded per-request work.** The Aho-Corasick scan is O(n) in input length with a constant factor independent of list size; no input can force superlinear CPU or memory. The 256-match cap bounds response size and per-match allocations, not scan cost — the scan always traverses the full input regardless of how many hits it produces.
