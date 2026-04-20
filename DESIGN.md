@@ -4,7 +4,7 @@
 
 A high-throughput, low-latency HTTP service that answers: *"Does this string contain a banned word?"* across multiple languages. The authoritative word list is sourced from [LDNOOBW](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words).
 
-Target: p99 latency < 1 ms for strings up to 1 KiB on a single core; tens of thousands of RPS per instance.
+Target: p99 latency < 1 ms for a 1 KiB reference input on a single core; tens of thousands of RPS per instance. Larger inputs (up to the 64 KiB body limit; see API) scale linearly in the Aho-Corasick scan — the p99 target applies to the reference size, not the hard limit.
 
 ## Non-goals
 
@@ -37,8 +37,8 @@ Target: p99 latency < 1 ms for strings up to 1 KiB on a single core; tens of tho
 LDNOOBW ships one file per language (e.g. `en`, `es`, `fr`, `de`, `ja`, …). At build time we:
 
 1. Vendor the repo as a git submodule or download pinned by commit SHA.
-2. Generate a `phf`-backed map `lang -> &[&str]` via `build.rs`.
-3. At startup, build one `AhoCorasick` automaton per language and store them in an `Arc<HashMap<Lang, AhoCorasick>>`. Automatons are immutable and shared across all request tasks.
+2. Generate a `phf`-backed map `lang -> &[&str]` via `build.rs` (compile-time, zero-alloc lookup into the term tables).
+3. At startup, build one `AhoCorasick` automaton per language and store them in an `Arc<HashMap<Lang, AhoCorasick>>`. The automaton map uses `HashMap` rather than `phf` because `AhoCorasick` is not const-constructible; it is populated once at startup and read-only thereafter. Automatons are immutable and shared across all request tasks.
 
 Memory footprint estimate: LDNOOBW is ~5k terms total across languages; the combined DFAs are well under 10 MiB.
 
@@ -47,10 +47,11 @@ Memory footprint estimate: LDNOOBW is ~5k terms total across languages; the comb
 Both **strict** (whole-word) and **substring** matching are first-class in v1. Callers pick per request via the `mode` field; when `mode` is omitted, the server applies the per-language default listed below.
 
 - **Normalization.** Input is NFKC-normalized, then lowercased via `caseless`, in both modes. NFKC (vs NFC) is chosen deliberately — it folds compatibility forms (fullwidth, ligatures, superscripts) that are otherwise trivial evasion vectors.
-- **`mode: "strict"`.** A term matches only when both edges fall on a Unicode word boundary per UAX #29. Mitigates the **Scunthorpe problem** for space-delimited languages.
+- **`mode: "strict"`.** A term matches only when both edges fall on a Unicode word boundary per UAX #29. Mitigates the common **Scunthorpe problem** (banned term appearing as a substring of a safe word) for space-delimited languages. Known residual cases not handled in v1: punctuation- or hyphen-joined obfuscations (e.g., `s-h-i-t`), zero-width-joiner insertions, and leetspeak substitutions. See "Deferred to v2".
 - **`mode: "substring"`.** Any Aho-Corasick hit counts. Appropriate for CJK (UAX #29 word boundaries are unreliable there) and for callers who explicitly want aggressive matching.
 - **Per-language default** (applied when `mode` is omitted): `strict` for space-delimited languages (en, es, fr, de, pt, it, nl, ru, …); `substring` for CJK (ja, zh, ko). The mode chosen per language is echoed back in `mode_used` so callers can audit.
 - **Span semantics.** Match `start`/`end` are byte offsets into the caller's **original** request text, suitable for direct slicing (`text[start:end]`) for redaction or highlighting. The normalizer maintains an offset map alongside the normalized buffer in a single pass, and matches are translated back before serialization. Cost: one extra `Vec<u32>` allocation per request, dwarfed by JSON parsing.
+- **Mapping across NFKC expansions.** When one source codepoint expands to multiple normalized codepoints (ligatures like `ﬁ` → `fi`, compatibility forms, fullwidth letters), a match covering any portion of the expanded output maps back to the **entire source codepoint's byte range**. This is intentionally conservative: it guarantees `text[start:end]` always contains the offending content in full, at the cost of occasionally widening the reported span beyond the minimum. Spans are always on UTF-8 codepoint boundaries in the original text.
 
 Both modes share the same automaton; the difference is a post-match boundary check, so there is no meaningful perf gap between them.
 
@@ -69,7 +70,7 @@ Request body (JSON, max 64 KiB — 413 `payload_too_large` above that):
 ```
 
 - `text` — string, required, non-empty.
-- `langs` — array of loaded language codes, optional. Defaults to every loaded language.
+- `langs` — array of loaded language codes, optional. Defaults to every loaded language. Codes are lowercase ASCII (ISO 639-1 where available, e.g. `en`, `ja`); inputs are case-folded before lookup so `"EN"` and `"en"` are equivalent.
 - `mode` — `"strict"` | `"substring"`, optional. Omit to apply the per-language default.
 
 Success response (200):
@@ -86,7 +87,7 @@ Success response (200):
 ```
 
 - When `banned: false`, `matches` is `[]`. `mode_used` is always populated with an entry for every requested (or defaulted) language.
-- Matches are returned in leftmost-longest, non-overlapping order, capped at **256 per request**. If more were found, `truncated` is `true`. This bounds response size on pathological input.
+- Matches are returned in leftmost-longest, non-overlapping order, capped at the **first 256 per request in that order**. If more were found, `truncated` is `true` and the caller knows the response is a prefix of the full match list. This bounds response size on pathological input.
 
 Error response (4xx):
 
@@ -104,7 +105,7 @@ Error response (4xx):
 ### Other endpoints
 
 - `GET /healthz` — liveness.
-- `GET /readyz` — readiness (automatons loaded).
+- `GET /readyz` — readiness (automatons loaded). Response body is `{ "ready": true, "list_version": "<LDNOOBW commit SHA>", "languages": N }` so operators and callers can audit the exact list version the running binary was built against.
 - `GET /metrics` — Prometheus scrape.
 - `GET /v1/languages` — list of loaded language codes and each one's default mode.
 
@@ -135,10 +136,6 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 - **Per-tenant allowlist / denylist overrides.** The v1 request schema will silently accept (and ignore) an `overrides` field, so adding real semantics later is non-breaking.
 - **Leetspeak / homoglyph normalization.** Requires careful false-positive analysis before shipping.
 - **Multi-tenant rate limiting.** Likely belongs in the gateway, not this service — revisit if that assumption breaks.
-
-## Open questions
-
-1. **Versioning of the word list.** Expose the LDNOOBW commit SHA in `/readyz` so callers can audit exactly which list version they're hitting.
 
 ## Milestones
 
