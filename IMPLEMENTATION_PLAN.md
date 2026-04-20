@@ -51,7 +51,7 @@ banned-words-service/
 **Goal.** Empty binary that loads the LDNOOBW list at compile time.
 
 1. `cargo init --bin`; commit `Cargo.toml` skeleton, workspace-free.
-2. Add submodule: `git submodule add https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words vendor/ldnoobw`; pin to a specific SHA and record it in `build.rs`.
+2. Add submodule: `git submodule add https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words vendor/ldnoobw`; pin to `5faf2ba42d7b1c0977169ec3611df25a3c08eb13` (LDNOOBW default-branch HEAD as of scaffold) and surface the SHA as `LIST_VERSION` in the generated terms file. Re-pinning later is a deliberate, release-worthy act — not routine maintenance.
 3. `build.rs`:
    - Walk `vendor/ldnoobw/`, pick up per-language files (`en`, `es`, …).
    - Emit the generated file to `$OUT_DIR/generated_terms.rs` (pulled in from `src/matcher/mod.rs` via `include!`). Never write into the source tree — that dirties the working copy, races cargo's rerun detection, and breaks the reproducible-build claim in M9. The file contains:
@@ -60,7 +60,7 @@ banned-words-service/
    - Emit `cargo:rerun-if-changed=vendor/ldnoobw` and on the submodule HEAD.
 4. Hello-world `main.rs` that prints `LIST_VERSION` and term counts per language. Smoke-test: `cargo run` prints something plausible.
 
-**Exit criteria.** `cargo build` green; `LIST_VERSION` matches the pinned submodule SHA; term counts sum to the expected ~5k.
+**Exit criteria.** `cargo build` green; `LIST_VERSION == "5faf2ba42d7b1c0977169ec3611df25a3c08eb13"`; term counts sum to the expected ~5k.
 
 ## Milestone 2 — Matching core (library)
 
@@ -185,9 +185,5 @@ banned-words-service/
 - Leetspeak / homoglyph normalization.
 - Multi-tenant rate limiting (belongs in gateway).
 - Hot reload of the list (deliberately never).
-
-## Open questions to resolve during M1–M2
-
-- Exact LDNOOBW submodule SHA to pin (pick the latest commit at scaffold time; record in `build.rs` and PR description).
-- Which CJK segmentation crate to depend on, if any, for stricter substring variants in v2 (none needed for v1 — `substring` is the default).
-- Whether to expose a `bws_scan_bytes_total{lang}` counter; deferred unless a dashboard needs it.
+- Stricter CJK substring matching via a segmentation crate (`lindera` or similar) — revisit only if a caller explicitly asks for it. v1's CJK default is `substring`, and explicit `strict` on CJK is honored but under-matches by design; segmentation-crate dictionaries are multi-megabyte and would bloat the image for a feature no v1 caller has asked for.
+- Per-language scan-bytes counter (`bws_scan_bytes_total{lang}`) — existing `bws_match_duration_seconds{lang,mode}` and `bws_input_bytes` cover per-language hot-path cost and aggregate throughput; add only if a dashboard needs absolute byte counts per language that can't be derived from existing series.
