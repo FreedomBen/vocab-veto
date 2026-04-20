@@ -14,6 +14,7 @@ A concrete, milestone-ordered plan for building the service specified in [DESIGN
 ```
 banned-words-service/
 ├── Cargo.toml
+├── Makefile                       # build/test/lint/docker/run/help (M7)
 ├── rust-toolchain.toml
 ├── build.rs                       # codegen: LDNOOBW → phf term tables
 ├── DESIGN.md
@@ -39,7 +40,7 @@ banned-words-service/
 │   ├── model.rs                   # Request/Response DTOs (serde)
 │   ├── observability.rs           # tracing-subscriber + metrics registry
 │   └── limits.rs                  # in-flight gate, body-size layer
-├── tests/                         # integration tests (axum TestServer)
+├── tests/                         # integration tests (Router::oneshot)
 ├── benches/                       # criterion benches
 └── deploy/
     ├── Dockerfile                 # cargo-chef + distroless
@@ -53,7 +54,7 @@ banned-words-service/
 1. `cargo init --bin`; commit `Cargo.toml` skeleton, workspace-free.
 2. Add submodule: `git submodule add https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words vendor/ldnoobw`; pin to `5faf2ba42d7b1c0977169ec3611df25a3c08eb13` (LDNOOBW default-branch HEAD as of scaffold) and surface the SHA as `LIST_VERSION` in the generated terms file. Re-pinning later is a deliberate, release-worthy act — not routine maintenance.
 3. `build.rs`:
-   - Walk `vendor/ldnoobw/`, pick up per-language files (`en`, `es`, …).
+   - Walk `vendor/ldnoobw/` against a hardcoded allowlist of language codes (mirrors `DEFAULT_MODE`; see M3 item 4). Skip `fr-CA-u-sd-caqc` (regional variant redundant with `fr`; the only BCP-47-tagged file at the pinned SHA) and non-language files (`README.md`, `LICENSE`, `CODE_OF_CONDUCT.md`). Fail the build if the vendored directory has a file not in the allowlist, or if an allowlisted code has no file — catches LDNOOBW drift and forces an explicit default-mode decision for any new language.
    - Emit the generated file to `$OUT_DIR/generated_terms.rs` (pulled in from `src/matcher/mod.rs` via `include!`). Never write into the source tree — that dirties the working copy, races cargo's rerun detection, and breaks the reproducible-build claim in M9. The file contains:
      - `pub const LIST_VERSION: &str = "<SHA>";`
      - `pub static TERMS: phf::Map<&'static str, &'static [&'static str]>` keyed by lowercase ISO code.
@@ -73,7 +74,7 @@ banned-words-service/
 2. `matcher::boundary`: `is_word_boundary(s: &str, byte_idx: usize) -> bool` per UAX #29, using `unicode-segmentation`.
 3. `matcher::scan`:
    - `Engine::new(langs: &HashMap<Lang, &[&str]>) -> Engine` builds one `AhoCorasick` per lang with `MatchKind::LeftmostLongest`, non-overlapping.
-   - `Engine::scan(text: &str, langs: &[Lang], mode: Option<Mode>) -> ScanResult { mode_used, matches, truncated }`. `mode = Some(m)` applies `m` uniformly to every scanned language (including CJK — no clamping) and echoes `m` in `mode_used` for each; `mode = None` looks each lang up in the `DEFAULT_MODE` table (populated in M4) and echoes the resolved value. `mode_used` always has one entry per scanned language.
+   - `Engine::scan(text: &str, langs: &[Lang], mode: Option<Mode>) -> ScanResult { mode_used, matches, truncated }`. `mode = Some(m)` applies `m` uniformly to every scanned language (including CJK — no clamping) and echoes `m` in `mode_used` for each; `mode = None` looks each lang up in the `DEFAULT_MODE` table (populated in M3) and echoes the resolved value. `mode_used` always has one entry per scanned language.
    - Both modes share the same per-language `AhoCorasick`; strict mode is a **post-match boundary filter** over the hits produced by the shared automaton, not a second automaton. Keeps hot-path memory flat regardless of which mode a request picks.
    - Span widening across NFKC expansions as specified in DESIGN §"Mapping across NFKC expansions".
    - 256-match cap applied *after* concatenation in caller-supplied `langs` order (alphabetical when omitted).
@@ -87,13 +88,17 @@ banned-words-service/
 
 1. `config.rs`:
    - `BWS_LISTEN_ADDR`: HTTP listen address. Defaults to `0.0.0.0:8080` when unset — matches DESIGN §Deployment, and keeps `cargo run` and local Docker usage working with only `BWS_API_KEYS` set.
-   - `BWS_API_KEYS`: **required**. Parse per DESIGN §Deployment — split on `,`, trim surrounding ASCII whitespace from each entry, reject empty entries, deduplicate, reject any entry that itself contains `,`; warn (do not reject) on entries shorter than 32 bytes. Unset / empty / zero-keys after parsing is a fatal startup error with a clear message.
+   - `BWS_API_KEYS`: **required**. Parse per DESIGN §Deployment — split on `,`, trim surrounding ASCII whitespace from each entry, reject empty entries, deduplicate; warn (do not reject) on entries shorter than 32 bytes. Unset / empty / zero-keys after parsing is a fatal startup error with a clear message. No comma-containing-entry check: the split guarantees entries are comma-free, and DESIGN §Deployment frames "keys cannot contain `,`" as operator guidance, not a runtime validation.
    - `BWS_LANGS`: optional runtime allowlist. Parse per DESIGN §Deployment — split on `,`, trim surrounding ASCII whitespace, ASCII-lowercase, reject empty entries, deduplicate. Defaults to every compiled language. Unknown-code rejection lands in M4; parsing rules apply from M3.
    - `BWS_MAX_INFLIGHT`: default `1024`.
-   Config unit tests cover each `BWS_API_KEYS` rule independently: whitespace trim, empty-entry rejection, dedup, comma-in-key rejection, short-key warning emission, zero-keys fatal.
+   Config unit tests cover each `BWS_API_KEYS` rule independently: whitespace trim, empty-entry rejection, dedup, short-key warning emission, zero-keys fatal.
 2. `auth.rs`: extract `Authorization: Bearer <k>`, compare each candidate via `subtle::ConstantTimeEq`, **always iterating the full set**. Log `key_id = hex(sha256(key))[..8]` on success; log only `reason` on failure.
-3. `error.rs`: single `ApiError` enum → `IntoResponse` producing `{error, message}` with the right status. `X-List-Version` attachment is **not** done here — it lives in a response-layer middleware scoped to the `/v1` sub-router (see item 7), so `/healthz`, `/readyz`, `/metrics` do not carry the header while every `/v1/*` response (success, 4xx including fast-pathed 401, and 5xx) does.
-4. `matcher::DEFAULT_MODE: phf::Map<&str, Mode>` — space-delimited langs → `Strict`, CJK (`ja`, `zh`, `ko`) → `Substring`. Full table lands here (pulled forward from M4) even though only `en` is actively loaded in M3, so `routes/languages.rs` can serve its canonical shape from day one. M4 then adds languages to the automaton map without churning the `/v1/languages` response contract.
+3. `error.rs`: single `ApiError` enum → `IntoResponse` producing `{error, message}` with the right status. `X-List-Version` attachment is **not** done here — it lives in a response-layer middleware scoped to the `/v1` sub-router (see item 8), so `/healthz`, `/readyz`, `/metrics` do not carry the header while every `/v1/*` response (success, 4xx including fast-pathed 401, and 5xx) does.
+4. `matcher::DEFAULT_MODE: phf::Map<&str, Mode>` — concrete 27-entry table keyed by the LDNOOBW codes shipped at the pinned SHA:
+   - **`Substring`** (4): `ja`, `ko`, `th`, `zh` — scripts without reliable inter-word spaces, so UAX #29 boundaries under-match.
+   - **`Strict`** (23): `ar`, `cs`, `da`, `de`, `en`, `eo`, `es`, `fa`, `fi`, `fil`, `fr`, `hi`, `hu`, `it`, `kab`, `nl`, `no`, `pl`, `pt`, `ru`, `sv`, `tlh`, `tr`.
+
+   Full table lands here (pulled forward from M4) even though only `en` is actively loaded in M3, so `routes/languages.rs` can serve its canonical shape from day one. M4 then adds languages to the automaton map without churning the `/v1/languages` response contract. Build-time drift (a new LDNOOBW language with no `DEFAULT_MODE` entry, or an entry with no vendored file) is caught by the allowlist check in M1 item 3.
 5. `routes/check.rs`: deserialize `CheckRequest`; validate, ASCII-lowercasing each `langs` entry before membership check so `"EN"` and `"en"` are equivalent (DESIGN §"POST /v1/check"); call `Engine::scan`; serialize `CheckResponse`. `mode_used` populated for every requested language.
 6. `routes/languages.rs`: response from the compiled table in alphabetical order by ISO code, shape `{"languages": [{code, default_mode}, ...]}` (DESIGN §"Other endpoints"), restricted to languages currently in the automaton map. `default_mode` is sourced from `matcher::DEFAULT_MODE`.
 7. `routes/health.rs`: `/healthz` always returns 200. `/readyz` returns 200 with `{ "ready": true, "list_version": "<SHA>", "languages": N }` once all automatons are built, else 503 with `{ "ready": false }`. The listener binds only *after* the engine is ready, so the 503 state is essentially unobservable in practice — still implemented for correctness and for operators inspecting a sidecar that races startup.
@@ -122,7 +127,7 @@ banned-words-service/
 2. 413 at both raw-body (64 KiB, via `tower_http::limit::RequestBodyLimitLayer`) and post-normalization (192 KiB, inside the handler before scan).
 3. 503 `overloaded` returns immediately when the gate is full.
 4. Unknown-fields pass-through confirmed by test (including the reserved `overrides` key).
-5. Error-table test: one test per row of the DESIGN §API error table. The `500 internal` row is covered by a unit test on `ApiError::Internal.into_response()` asserting status, `{error: "internal", message}` body shape, and no leaked diagnostic detail — end-to-end triggering isn't worth a test-only code path.
+5. Error-table tests for the rows M3 item 9 didn't cover: `422 invalid_mode`, `413 payload_too_large` (post-normalization path, via the 192 KiB cap in item 2), `503 overloaded` (via the in-flight gate in item 1), and `500 internal`. The `500 internal` row is covered by a unit test on `ApiError::Internal.into_response()` asserting status, `{error: "internal", message}` body shape, and no leaked diagnostic detail — end-to-end triggering isn't worth a test-only code path. Rows already asserted in M3 (`401 unauthorized`, `400 bad_request`, `413 payload_too_large` raw-body, `422 empty_text`, `422 empty_langs`, `422 unknown_language`) are not re-tested here.
 
 **Exit criteria.** All documented 4xx/5xx paths have a test; `X-List-Version` present on every `/v1/*` response including errors.
 
@@ -153,6 +158,7 @@ banned-words-service/
 2. Image labels: `org.opencontainers.image.revision`, `list_version` (the LDNOOBW SHA).
 3. k8s manifests under `deploy/k8s/`: Deployment, Service, HPA (CPU + `bws_inflight` via custom metric adapter — stubbed), liveness → `/healthz`, readiness → `/readyz`.
 4. `README` snippet: env-var table mirrored from DESIGN (single source of truth kept in DESIGN; README links there).
+5. Root `Makefile` (default `PREFIX=/usr/local` per global convention) with targets: `help` (default; lists the targets with one-line descriptions), `build` (`cargo build --release`), `test` (`cargo test`), `lint` (`cargo fmt --check && cargo clippy -- -D warnings`), `docker` (build the container image, tagged with the LDNOOBW SHA), and `run` (`cargo run` with a dev-only `BWS_API_KEYS`). M9's `make docker` exit criterion depends on this target existing.
 
 **Exit criteria.** `docker run` locally serves `/v1/check` end-to-end; image size under 30 MB.
 
@@ -185,5 +191,5 @@ banned-words-service/
 - Leetspeak / homoglyph normalization.
 - Multi-tenant rate limiting (belongs in gateway).
 - Hot reload of the list (deliberately never).
-- Stricter CJK substring matching via a segmentation crate (`lindera` or similar) — revisit only if a caller explicitly asks for it. v1's CJK default is `substring`, and explicit `strict` on CJK is honored but under-matches by design; segmentation-crate dictionaries are multi-megabyte and would bloat the image for a feature no v1 caller has asked for.
+- Stricter substring matching for CJK/Thai via a segmentation crate (`lindera` or similar for CJK; a dedicated Thai segmenter for Thai) — revisit only if a caller explicitly asks for it. v1's default is `substring` for these scripts, and explicit `strict` is honored but under-matches by design; segmentation-crate dictionaries are multi-megabyte and would bloat the image for a feature no v1 caller has asked for.
 - Per-language scan-bytes counter (`bws_scan_bytes_total{lang}`) — existing `bws_match_duration_seconds{lang,mode}` and `bws_input_bytes` cover per-language hot-path cost and aggregate throughput; add only if a dashboard needs absolute byte counts per language that can't be derived from existing series.
