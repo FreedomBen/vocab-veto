@@ -38,7 +38,7 @@ All common tasks run through the top-level `Makefile`:
 | `make test`    | `cargo test --locked` (unit + integration).                         |
 | `make bench`   | `cargo bench --no-run --locked` (compile-check the criterion suite).|
 | `make lint`    | `cargo fmt --check` + `cargo clippy -- -D warnings`.                |
-| `make docker`  | Build the distroless container image, tagged with the LDNOOBW SHA. |
+| `make docker`  | Build the distroless container image via podman (rootless default); override with `CONTAINER=docker`. Tagged with the LDNOOBW SHA. |
 | `make run`     | Run locally with a dev-only `BWS_API_KEYS`.                         |
 
 ## Configuration

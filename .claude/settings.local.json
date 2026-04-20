@@ -22,7 +22,8 @@
       "Bash(grep -E \"\\(metrics$|metrics-exporter-prometheus$|axum-prometheus$\\)\")",
       "Bash(cargo add *)",
       "Bash(xargs -I{} grep -l AppState {})",
-      "Bash(make help *)"
+      "Bash(make help *)",
+      "Bash(make *)"
     ]
   }
 }
