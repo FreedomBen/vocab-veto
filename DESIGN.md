@@ -70,8 +70,10 @@ Request body (JSON, max 64 KiB — 413 `payload_too_large` above that):
 ```
 
 - `text` — string, required, non-empty.
-- `langs` — array of loaded language codes, optional. Defaults to every loaded language. Codes are lowercase ASCII (ISO 639-1 where available, e.g. `en`, `ja`); inputs are case-folded before lookup so `"EN"` and `"en"` are equivalent.
+- `langs` — array of loaded language codes, optional. Defaults to every loaded language. Codes are lowercase ASCII (ISO 639-1 where available, e.g. `en`, `ja`); inputs are case-folded before lookup so `"EN"` and `"en"` are equivalent. An empty array (`[]`) is rejected with 422 `empty_langs` — to scan every loaded language, omit the field rather than send `[]`, so the "none" vs. "all" distinction stays explicit.
 - `mode` — `"strict"` | `"substring"`, optional. Omit to apply the per-language default.
+
+**Forward compatibility.** Unknown top-level request fields are accepted and silently ignored (serde's `deny_unknown_fields` is deliberately **not** set). This lets v2 extend the schema without breaking v1 clients. The `overrides` key is reserved for future per-tenant allow/denylists; see "Deferred to v2".
 
 Success response (200):
 
@@ -80,13 +82,15 @@ Success response (200):
   "banned": true,
   "mode_used": { "en": "strict", "ja": "substring" },
   "matches": [
-    { "lang": "en", "term": "****", "start": 12, "end": 16 }
+    { "lang": "en", "term": "****", "matched_text": "****", "start": 12, "end": 16 }
   ],
   "truncated": false
 }
 ```
 
+- Each match carries both `term` — the canonical dictionary entry from LDNOOBW, stable across requests and useful for grouping, metrics, and deduplication — and `matched_text`, the exact slice of the caller's **original** input (`text[start:end]`). The two differ after NFKC folding and case folding: e.g. a term listed as `idiot` may surface with `matched_text: "Ｉｄｉｏｔ"`. `term` is a `&'static str` from the compiled table (zero cost); `matched_text` is a short heap allocation per match and is bounded by the 256-match cap.
 - When `banned: false`, `matches` is `[]`. `mode_used` is always populated with an entry for every requested (or defaulted) language.
+- Every `/v1/check` response — success or error — carries an `X-List-Version: <LDNOOBW commit SHA>` header. This lets each decision be audited against a specific list version without a round trip to `/readyz`, and survives proxies that rewrite bodies.
 - Matches are returned in leftmost-longest, non-overlapping order, capped at the **first 256 per request in that order**. If more were found, `truncated` is `true` and the caller knows the response is a prefix of the full match list. This bounds response size on pathological input.
 
 Error response (4xx):
@@ -101,6 +105,7 @@ Error response (4xx):
 | 413  | `payload_too_large` | Request body exceeds 64 KiB.                      |
 | 422  | `invalid_mode`      | `mode` is present but not in the enum.            |
 | 422  | `unknown_language`  | A `langs` entry is not a loaded language code.    |
+| 422  | `empty_langs`       | `langs` is present but empty (`[]`).              |
 
 ### Other endpoints
 
@@ -108,6 +113,23 @@ Error response (4xx):
 - `GET /readyz` — readiness (automatons loaded). Response body is `{ "ready": true, "list_version": "<LDNOOBW commit SHA>", "languages": N }` so operators and callers can audit the exact list version the running binary was built against.
 - `GET /metrics` — Prometheus scrape.
 - `GET /v1/languages` — list of loaded language codes and each one's default mode.
+
+### Metrics contract
+
+`/metrics` exposes the Prometheus series below. Label cardinality is bounded by (languages loaded × mode × status), so total series count stays in the low hundreds across a realistic deployment.
+
+| Metric                         | Type      | Labels                   | Purpose                                                                  |
+| ------------------------------ | --------- | ------------------------ | ------------------------------------------------------------------------ |
+| `bws_requests_total`           | counter   | `status` (2xx / 4xx / 5xx) | Request rate and error ratio — the R and E of RED.                     |
+| `bws_request_duration_seconds` | histogram | `status`                 | End-to-end latency including JSON parse and serialize.                   |
+| `bws_match_duration_seconds`   | histogram | `lang`, `mode`           | Aho-Corasick scan time per (lang, mode); isolates the hot path from HTTP/JSON overhead. |
+| `bws_matches_per_request`      | histogram | —                        | Distribution of match counts per request; informs tuning of the 256 cap. |
+| `bws_truncated_total`          | counter   | —                        | Count of responses with `truncated: true`; expected rare, alert-worthy if not. |
+| `bws_input_bytes`              | histogram | —                        | Distribution of `text` lengths in bytes; detects outlier traffic.        |
+| `bws_list_version_info`        | gauge     | `sha`                    | Constant 1; lets dashboards and alerts pivot on list version across a pod fleet. |
+| `bws_languages_loaded`         | gauge     | —                        | Count of automatons live after startup; sanity check for `BWS_LANGS`.    |
+
+Histogram buckets default to the `axum-prometheus` preset tuned for sub-millisecond latency; override via env for deployments with different SLO targets.
 
 ### Why return match spans
 
@@ -127,9 +149,19 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 - Container image built via `cargo chef` for fast layer caching.
 - Config via env vars:
   - `BWS_LISTEN_ADDR` — HTTP listen address (e.g. `0.0.0.0:8080`).
-  - `BWS_LANGS` — optional comma-separated runtime allowlist (e.g. `en,es,fr`). Defaults to every language compiled into the binary. Useful for slimming a single fat image down to a specific deployment's needs without rebuilding.
+  - `BWS_LANGS` — optional comma-separated runtime allowlist (e.g. `en,es,fr`). Defaults to every language compiled into the binary. Useful for slimming a single fat image down to a specific deployment's needs without rebuilding. A code not compiled into the binary is a **fatal startup error** (`unknown language in BWS_LANGS: xx; compiled: ...`); silent drops would mask deploy-config typos and let a pod come up serving fewer languages than the operator intended.
   - *(No `BWS_DEFAULT_MODE` — mode defaulting is per-language and defined in code, not config, so behavior is identical across deployments.)*
 - **List updates ship via redeploy.** No hot reload, ever — it keeps the hot path lock-free and makes the running version trivially auditable (image tag = list version).
+
+## Threat model and abuse posture
+
+The service assumes it is deployed behind an authenticated API gateway or inside a trusted internal network. It does **not** perform authentication, per-caller rate limiting, request signing, or quota enforcement. The only in-process defenses against abusive traffic are:
+
+- **64 KiB request body cap** — 413 above that.
+- **256-match response cap** — `truncated: true` above that.
+- **Bounded per-request work.** The Aho-Corasick scan is O(n) in input length with a constant factor independent of list size; no input can force superlinear CPU or memory.
+
+If the service is ever exposed directly to the public internet, a gateway-level rate limit and request-size policy must be added first. Multi-tenant rate limiting is deferred to v2 and is expected to live in the gateway regardless (see below).
 
 ## Deferred to v2
 
