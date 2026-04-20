@@ -50,7 +50,7 @@ Both **strict** (whole-word) and **substring** matching are first-class in v1. C
 - **`mode: "strict"`.** A term matches only when both edges fall on a Unicode word boundary per UAX #29. Mitigates the **Scunthorpe problem** for space-delimited languages.
 - **`mode: "substring"`.** Any Aho-Corasick hit counts. Appropriate for CJK (UAX #29 word boundaries are unreliable there) and for callers who explicitly want aggressive matching.
 - **Per-language default** (applied when `mode` is omitted): `strict` for space-delimited languages (en, es, fr, de, pt, it, nl, ru, …); `substring` for CJK (ja, zh, ko). The mode chosen per language is echoed back in `mode_used` so callers can audit.
-- **Span semantics.** Match `start`/`end` are byte offsets into the *normalized* request text, not the caller's original input. NFKC can change byte length, so they do not round-trip directly. Callers wishing to redact must re-normalize on their side. (See Open Question #2 — we may revisit and map back to original offsets.)
+- **Span semantics.** Match `start`/`end` are byte offsets into the caller's **original** request text, suitable for direct slicing (`text[start:end]`) for redaction or highlighting. The normalizer maintains an offset map alongside the normalized buffer in a single pass, and matches are translated back before serialization. Cost: one extra `Vec<u32>` allocation per request, dwarfed by JSON parsing.
 
 Both modes share the same automaton; the difference is a post-match boundary check, so there is no meaningful perf gap between them.
 
@@ -139,7 +139,6 @@ Callers often want to redact or highlight, not just know the boolean. Returning 
 ## Open questions
 
 1. **Versioning of the word list.** Expose the LDNOOBW commit SHA in `/readyz` so callers can audit exactly which list version they're hitting.
-2. **Match span offsets — normalized vs original.** v1 currently documents spans as byte offsets over the *normalized* text. If callers need to redact directly from their original input, we should instead maintain a normalization offset map and translate spans back to original byte offsets (small amount of extra code, negligible perf impact). Decision needed before v1.0.
 
 ## Milestones
 
