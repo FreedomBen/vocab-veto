@@ -30,6 +30,27 @@ fn test_state() -> Arc<AppState> {
     })
 }
 
+/// Three-language fixture for M4 tests. Synthetic per-lang terms chosen to be
+/// disjoint so a match unambiguously attributes to one language.
+fn multi_lang_state() -> Arc<AppState> {
+    let mut langs: HashMap<Lang, &[&str]> = HashMap::new();
+    langs.insert("en".into(), &["foo"][..]);
+    langs.insert("ja".into(), &["バカ"][..]);
+    langs.insert("zh".into(), &["笨蛋"][..]);
+    let engine = Arc::new(Engine::new(&langs));
+    Arc::new(AppState {
+        engine,
+        api_keys: vec![TEST_KEY.as_bytes().to_vec()],
+        list_version: LIST_VERSION,
+        ready: AtomicBool::new(true),
+        max_inflight: 1024,
+    })
+}
+
+async fn send_with(state: Arc<AppState>, req: Request<Body>) -> Response<Body> {
+    build_router(state).oneshot(req).await.unwrap()
+}
+
 fn authed(method: &str, path: &str, body: Body) -> Request<Body> {
     Request::builder()
         .method(method)
@@ -293,6 +314,117 @@ async fn happy_path_returns_match() {
     assert_eq!(matches[0]["start"], 5);
     assert_eq!(matches[0]["end"], 9);
     assert_eq!(v["truncated"], false);
+}
+
+// ---------------------------------------------------------------------------
+// M4 — multi-language and mode defaults
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn multi_lang_request_returns_mode_used_per_lang() {
+    let state = multi_lang_state();
+    let req = authed(
+        "POST",
+        "/v1/check",
+        Body::from(r#"{"text":"foo バカ 笨蛋","langs":["en","ja","zh"]}"#),
+    );
+    let resp = send_with(state, req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json_body(resp).await;
+    // Defaults: en=strict, ja=substring, zh=substring.
+    assert_eq!(v["mode_used"]["en"], "strict");
+    assert_eq!(v["mode_used"]["ja"], "substring");
+    assert_eq!(v["mode_used"]["zh"], "substring");
+    let matches = v["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 3);
+    let langs_in_matches: Vec<&str> = matches
+        .iter()
+        .map(|m| m["lang"].as_str().unwrap())
+        .collect();
+    assert!(langs_in_matches.contains(&"en"));
+    assert!(langs_in_matches.contains(&"ja"));
+    assert!(langs_in_matches.contains(&"zh"));
+}
+
+#[tokio::test]
+async fn default_vs_explicit_mode_parity_latin_strict() {
+    // For en, default mode == explicit "strict"; response shape identical for both.
+    let req_default = authed(
+        "POST",
+        "/v1/check",
+        Body::from(r#"{"text":"hello foo","langs":["en"]}"#),
+    );
+    let req_explicit = authed(
+        "POST",
+        "/v1/check",
+        Body::from(r#"{"text":"hello foo","langs":["en"],"mode":"strict"}"#),
+    );
+    let v_default = json_body(send_with(multi_lang_state(), req_default).await).await;
+    let v_explicit = json_body(send_with(multi_lang_state(), req_explicit).await).await;
+    assert_eq!(v_default["mode_used"], v_explicit["mode_used"]);
+    assert_eq!(v_default["matches"], v_explicit["matches"]);
+}
+
+#[tokio::test]
+async fn default_mode_is_substring_for_cjk() {
+    let req = authed(
+        "POST",
+        "/v1/check",
+        Body::from(r#"{"text":"笨蛋","langs":["zh"]}"#),
+    );
+    let resp = send_with(multi_lang_state(), req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json_body(resp).await;
+    assert_eq!(v["mode_used"]["zh"], "substring");
+    assert_eq!(v["matches"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn explicit_strict_on_cjk_not_clamped() {
+    // Caller-supplied strict on zh wins; mode_used echoes strict without clamping.
+    let req = authed(
+        "POST",
+        "/v1/check",
+        Body::from(r#"{"text":"笨蛋","langs":["zh"],"mode":"strict"}"#),
+    );
+    let resp = send_with(multi_lang_state(), req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json_body(resp).await;
+    assert_eq!(v["mode_used"]["zh"], "strict");
+}
+
+#[tokio::test]
+async fn omitted_langs_scans_every_loaded_language() {
+    let req = authed("POST", "/v1/check", Body::from(r#"{"text":"foo"}"#));
+    let resp = send_with(multi_lang_state(), req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json_body(resp).await;
+    let mode_used = v["mode_used"].as_object().unwrap();
+    assert_eq!(mode_used.len(), 3);
+    assert!(mode_used.contains_key("en"));
+    assert!(mode_used.contains_key("ja"));
+    assert!(mode_used.contains_key("zh"));
+    // Match is in en; mode_used still carries every scanned lang.
+    let matches = v["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0]["lang"], "en");
+}
+
+#[tokio::test]
+async fn languages_endpoint_shows_cjk_defaults() {
+    let req = authed("GET", "/v1/languages", Body::empty());
+    let resp = send_with(multi_lang_state(), req).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = json_body(resp).await;
+    let entries = v["languages"].as_array().unwrap();
+    assert_eq!(entries.len(), 3);
+    // Alphabetical order: en, ja, zh.
+    assert_eq!(entries[0]["code"], "en");
+    assert_eq!(entries[0]["default_mode"], "strict");
+    assert_eq!(entries[1]["code"], "ja");
+    assert_eq!(entries[1]["default_mode"], "substring");
+    assert_eq!(entries[2]["code"], "zh");
+    assert_eq!(entries[2]["default_mode"], "substring");
 }
 
 #[tokio::test]

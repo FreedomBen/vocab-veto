@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use banned_words_service::build_router;
 use banned_words_service::config::load;
-use banned_words_service::matcher::{Engine, Lang, LIST_VERSION, TERMS};
+use banned_words_service::matcher::{resolve_loaded_langs, Engine, Lang, LIST_VERSION, TERMS};
 use banned_words_service::state::AppState;
 
 #[tokio::main]
@@ -13,14 +13,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cfg = load().inspect_err(|e| eprintln!("config error: {e}"))?;
 
-    // M3 loads only `en`; M4 loads every LDNOOBW language subject to `cfg.langs`.
-    let loaded: Vec<Lang> = vec!["en".to_string()];
-    let mut patterns: HashMap<Lang, &[&str]> = HashMap::new();
+    // BWS_LANGS may gate loading to a subset; unset ⇒ every compiled code.
+    // Unknown codes are a fatal startup error per IMPLEMENTATION_PLAN M4 item 4.
+    let loaded: Vec<Lang> =
+        resolve_loaded_langs(cfg.langs.as_deref()).inspect_err(|e| eprintln!("{e}"))?;
+
+    let mut patterns: HashMap<Lang, &[&str]> = HashMap::with_capacity(loaded.len());
     for lang in &loaded {
         let terms = TERMS
             .get(lang.as_str())
             .copied()
-            .ok_or_else(|| format!("compiled term table missing language: {lang}"))?;
+            .expect("resolve_loaded_langs has already verified every entry is in TERMS");
         patterns.insert(lang.clone(), terms);
     }
 
