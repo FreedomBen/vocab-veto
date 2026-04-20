@@ -14,7 +14,7 @@ This repository is **pre-code**. The only tracked artifacts today are design doc
 - [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) — milestone-ordered plan derived from DESIGN.md. Each milestone has explicit exit criteria; prefer working one milestone at a time rather than smearing work across several.
 - `repo.txt` — a single URL pointing at [LDNOOBW](https://github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words), the authoritative word list the service will vendor as a git submodule.
 
-No `Cargo.toml`, `Makefile`, `Dockerfile`, or source tree exists yet. Build/test/lint commands will be established during Milestone 1 of the implementation plan; update this file with real commands once they exist.
+No `Cargo.toml`, `Makefile`, `Containerfile`, or source tree exists yet. Build/test/lint commands will be established during Milestone 1 of the implementation plan; update this file with real commands once they exist.
 
 ## What this service is (big-picture)
 

@@ -1,14 +1,14 @@
-# syntax=docker/dockerfile:1.7
-#
 # Two-stage build that produces a distroless, non-root, statically-linked image.
-# Target: x86_64-unknown-linux-musl so the final stage can be
-# `gcr.io/distroless/static-debian12:nonroot` (no libc at runtime).
+# Built primarily with rootless podman (`podman build -f deploy/Containerfile`);
+# any OCI-compatible builder will work. Target: x86_64-unknown-linux-musl so the
+# final stage can be `gcr.io/distroless/static-debian12:nonroot` (no libc at
+# runtime).
 #
 # cargo-chef precomputes a dependency-only layer so code-only edits do not
 # reinvalidate the dep build. The build.rs in this crate calls
 # `git -C vendor/ldnoobw rev-parse HEAD` to derive LIST_VERSION, so the build
 # image needs `git` and the repo's `.git` directory must be part of the build
-# context (see .dockerignore).
+# context (see .containerignore).
 
 ARG RUST_VERSION=1.94
 ARG DISTROLESS_IMAGE=gcr.io/distroless/static-debian12:nonroot

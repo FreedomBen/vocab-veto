@@ -38,7 +38,7 @@ All common tasks run through the top-level `Makefile`:
 | `make test`    | `cargo test --locked` (unit + integration).                         |
 | `make bench`   | `cargo bench --no-run --locked` (compile-check the criterion suite).|
 | `make lint`    | `cargo fmt --check` + `cargo clippy -- -D warnings`.                |
-| `make docker`  | Build the distroless container image via podman (rootless default); override with `CONTAINER=docker`. Tagged with the LDNOOBW SHA. |
+| `make podman`  | Build the distroless container image via rootless podman; override with `CONTAINER=docker`. Tagged with the LDNOOBW SHA. |
 | `make run`     | Run locally with a dev-only `BWS_API_KEYS`.                         |
 
 ## Configuration
@@ -51,8 +51,8 @@ the highlights are `BWS_API_KEYS` (required, comma-separated bearer keys),
 
 ## Deployment
 
-[`deploy/Dockerfile`](./deploy/Dockerfile) produces a `distroless/static:nonroot`
-image via `cargo-chef` + musl. Kubernetes manifests for an in-cluster
+[`deploy/Containerfile`](./deploy/Containerfile) produces a `distroless/static:nonroot`
+image via `cargo-chef` + musl, built with rootless podman. Kubernetes manifests for an in-cluster
 (ClusterIP-only) deployment live under [`deploy/k8s/`](./deploy/k8s/). v1 is
 in-cluster only — there is no Ingress or LoadBalancer; public exposure belongs
 behind a separate gateway and is deferred to v2.

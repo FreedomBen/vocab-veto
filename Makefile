@@ -7,7 +7,7 @@
 PREFIX ?= /usr/local
 CARGO ?= cargo
 # Container CLI. Defaults to podman (rootless by default). Override with
-# `make docker CONTAINER=docker` on hosts that ship only Docker.
+# `make podman CONTAINER=docker` on hosts that ship only Docker.
 CONTAINER ?= podman
 
 IMAGE_NAME ?= banned-words-service
@@ -26,7 +26,7 @@ DEV_API_KEY ?= dev-key-do-not-use-in-production-0000000000000000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test bench lint docker run release-check install-tools
+.PHONY: help build test bench lint podman run release-check install-tools
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "; print "Vocab Veto — make targets\n"} \
@@ -47,13 +47,13 @@ lint: ## cargo fmt --check and cargo clippy -- -D warnings
 	$(CARGO) fmt --all --check
 	$(CARGO) clippy --all-targets --locked -- -D warnings
 
-docker: ## Build the container image (rootless podman; see footer for override), tagged with the LDNOOBW SHA
+podman: ## Build the container image (rootless podman; see footer for override), tagged with the LDNOOBW SHA
 	@if [ -z "$(LIST_SHA)" ]; then \
 	  echo "error: could not read LDNOOBW SHA from vendor/ldnoobw; run: git submodule update --init --recursive" >&2; \
 	  exit 1; \
 	fi
 	$(CONTAINER) build \
-	  -f deploy/Dockerfile \
+	  -f deploy/Containerfile \
 	  --build-arg LIST_VERSION=$(LIST_SHA) \
 	  --build-arg REVISION=$(REVISION) \
 	  -t $(IMAGE_NAME):$(LIST_SHA) \
@@ -66,7 +66,7 @@ run: ## Run locally via cargo run with a dev-only BWS_API_KEYS
 install-tools: ## Install pinned dev tools (oha for load tests)
 	$(CARGO) install --locked --version $(OHA_VERSION) oha
 
-release-check: lint test bench docker ## Full pre-tag gate: lint, test, bench-compile, container image
+release-check: lint test bench podman ## Full pre-tag gate: lint, test, bench-compile, container image
 	@echo ""
 	@echo "release-check OK"
 	@echo "  image: $(IMAGE_NAME):$(LIST_SHA)"

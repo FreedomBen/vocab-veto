@@ -11,7 +11,7 @@ Run from a clean checkout of `main`:
 ```bash
 git status                       # must be clean
 git submodule status vendor/ldnoobw   # must match the intended LDNOOBW SHA
-make release-check               # fmt, clippy, tests, bench-compile, docker build
+make release-check               # fmt, clippy, tests, bench-compile, podman build
 ```
 
 `make release-check` prints the image tag and revision it built on
@@ -23,10 +23,10 @@ Build twice from the same commit + submodule SHA and confirm the image
 manifest digest is stable (modulo the base layer's build timestamp):
 
 ```bash
-make docker && podman image inspect banned-words-service:latest \
+make podman && podman image inspect banned-words-service:latest \
     --format '{{.Digest}} {{.Config.Labels.list_version}}'
 podman image rm banned-words-service:latest banned-words-service:"$(git -C vendor/ldnoobw rev-parse HEAD)"
-make docker && podman image inspect banned-words-service:latest \
+make podman && podman image inspect banned-words-service:latest \
     --format '{{.Digest}} {{.Config.Labels.list_version}}'
 ```
 
