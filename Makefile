@@ -14,13 +14,19 @@ IMAGE_NAME ?= banned-words-service
 LIST_SHA := $(shell git -C vendor/ldnoobw rev-parse HEAD 2>/dev/null)
 REVISION := $(shell git rev-parse HEAD 2>/dev/null)
 
+# Pinned dev-tool versions. `install-tools` installs each via
+# `cargo install --locked --version $(VERSION) <crate>`, so rebuilds on
+# a fresh host resolve to the same source (Cargo.lock is consulted) and
+# the same version. Bumping a pin is a deliberate act.
+OHA_VERSION ?= 1.14.0
+
 # A throwaway dev key for `make run`. Long enough to clear the 32-byte short-
 # key warning. Never use this anywhere real.
 DEV_API_KEY ?= dev-key-do-not-use-in-production-0000000000000000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test bench lint docker run release-check
+.PHONY: help build test bench lint docker run release-check install-tools
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "; print "Vocab Veto — make targets\n"} \
@@ -56,6 +62,9 @@ docker: ## Build the container image (rootless podman; see footer for override),
 
 run: ## Run locally via cargo run with a dev-only BWS_API_KEYS
 	BWS_API_KEYS="$(DEV_API_KEY)" $(CARGO) run --release --locked
+
+install-tools: ## Install pinned dev tools (oha for load tests)
+	$(CARGO) install --locked --version $(OHA_VERSION) oha
 
 release-check: lint test bench docker ## Full pre-tag gate: lint, test, bench-compile, container image
 	@echo ""

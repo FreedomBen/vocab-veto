@@ -37,18 +37,27 @@ registry cache miss that pulled a newer patch-level crate).
 
 ## 3. Load-test report (M9 item 2)
 
-On a host with `oha`, `python3`, and `taskset`:
+One-time per host: install the pinned load-test tool.
 
 ```bash
-./scripts/load-test.sh            # 30s, c=64 against pinned core 0
+make install-tools                # cargo install --locked --version $(OHA_VERSION) oha
+```
+
+Then:
+
+```bash
+./scripts/load-test.sh            # 30s, c=1, port 18080, server on core 0
 ```
 
 The script writes
 `benches/load/reports/<timestamp>-<list_sha>.txt` containing the oha
 latency histogram. Milestone gate (from §M8 item 3): **p99 < 1 ms on
-1 KiB English input, single core.** Attach the report file to the
-release notes. If p99 regresses above the gate, do not tag — open
-an issue instead.
+1 KiB English input, single core.** c=1 is the service-time
+measurement the gate is written against; higher concurrency on a
+single-core server drifts into queue-dominated latency that doesn't
+reflect matcher performance. Attach the report file to the release
+notes. If p99 regresses above the gate, do not tag — open an issue
+instead.
 
 ## 4. `X-List-Version` sanity check (M9 item 3)
 

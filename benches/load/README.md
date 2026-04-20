@@ -5,10 +5,28 @@ in-process matcher. They are not compiled by cargo (cargo only picks up `.rs`
 files directly under `benches/`), so living alongside the criterion suite is
 safe.
 
+## scripts/load-test.sh (preferred entry point)
+
+`../../scripts/load-test.sh` is the orchestrator — it boots the release binary
+pinned to core 0 on port 18080, sanity-POSTs to confirm it's our server,
+invokes `oha-1kib-en.sh`, and writes a timestamped report to
+`reports/<timestamp>-<list_sha>.txt` (gitignored). Defaults to `c=1` because
+that's the service-time config the §M8 gate is written against.
+
 ## oha-1kib-en.sh
 
 Target from IMPLEMENTATION_PLAN §M8 item 3: **p99 < 1 ms on a single core with
-a 1 KiB English reference input.**
+a 1 KiB English reference input.** Measured at **c=1** — the gate is about
+matcher latency, not queueing. On a 1-core-pinned server, c > 1 quickly puts
+you in the queue-dominated regime where p99 reflects depth rather than
+service time.
+
+Install the pinned `oha` (version lives in the top-level `Makefile` under
+`OHA_VERSION`):
+
+```bash
+make install-tools
+```
 
 Recipe:
 
@@ -26,7 +44,10 @@ kill "${SERVER_PID}"
 ```
 
 Defaults: 30 s duration, 64 concurrent workers, against
-`http://127.0.0.1:8080/v1/check`. Override positionally:
+`http://127.0.0.1:8080/v1/check`. c=64 here is a throughput probe —
+useful for saturation/queue-behavior work, not for the §M8 gate. Use
+`../../scripts/load-test.sh` (which defaults to c=1) when you're
+producing a release report. Override positionally:
 
 ```bash
 BWS_API_KEY=... ./benches/load/oha-1kib-en.sh http://127.0.0.1:8080/v1/check 60s 128

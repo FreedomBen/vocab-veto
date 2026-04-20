@@ -24,7 +24,13 @@
       "Bash(xargs -I{} grep -l AppState {})",
       "Bash(make help *)",
       "Bash(make *)",
-      "Bash(bash -n scripts/load-test.sh)"
+      "Bash(bash -n scripts/load-test.sh)",
+      "Bash(oha --version)",
+      "Bash(command *)",
+      "Bash(./scripts/load-test.sh)",
+      "Bash(oha --help)",
+      "Bash(podman ps *)",
+      "Bash(./scripts/load-test.sh 30s 1 18080)"
     ]
   }
 }

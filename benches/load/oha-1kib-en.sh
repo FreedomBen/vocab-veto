@@ -34,14 +34,16 @@ with open(sys.argv[1], "w") as f:
     json.dump({"text": text, "langs": ["en"], "mode": "strict"}, f)
 PYEOF
 
-BODY="$(cat "${BODY_FILE}")"
-
+# Read the body from the file via -D (not -d with a shell-expanded string);
+# -d mangles payloads that contain shell metacharacters or exceed the
+# argv-length sweet-spot, which shows up as the server receiving malformed
+# requests and responding 405 to every one. -D feeds the exact bytes.
 exec oha \
     --no-tui \
     -m POST \
     -H "Authorization: Bearer ${BWS_API_KEY}" \
     -H "Content-Type: application/json" \
-    -d "${BODY}" \
+    -D "${BODY_FILE}" \
     -z "${DURATION}" \
     -c "${CONCURRENCY}" \
     "${URL}"
