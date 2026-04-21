@@ -1,0 +1,519 @@
+openapi: 3.1.0
+info:
+  title: Vocab Veto
+  summary: Multi-language banned-word detection over HTTP.
+  description: |
+    Stateless HTTP service that answers "does this string contain a banned
+    word?" across multiple languages, backed by Aho-Corasick automatons
+    compiled from the LDNOOBW word list at build time. The image tag is the
+    list version; there is no hot reload, no database, no external state.
+
+    See DESIGN.md in the repository for authoritative behavior, including
+    normalization semantics, span mapping across NFKC expansions, matching
+    defaults, and the threat model.
+  version: 1.0.0
+  license:
+    name: See repository LICENSE
+
+servers:
+  - url: http://banned-words-service.{namespace}.svc.cluster.local:8080
+    description: |
+      In-cluster (DOKS, ClusterIP) — the only exposure path in v1. Public
+      ingress is deferred to v2 and requires a gateway with rate limiting
+      and request-size policy in front.
+    variables:
+      namespace:
+        default: default
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: match
+    description: Banned-word scanning.
+  - name: metadata
+    description: Service metadata (loaded languages, list version).
+  - name: ops
+    description: Probes and metrics (unauthenticated).
+
+paths:
+  /v1/check:
+    post:
+      tags: [match]
+      summary: Scan text for banned words.
+      description: |
+        Scans the supplied text against one or more loaded languages and
+        returns all matches. Matching mode defaults per language (`strict`
+        for space-delimited languages, `substring` for CJK and Thai);
+        explicit caller mode wins and is echoed in `mode_used`.
+
+        Unknown top-level request fields are silently accepted and ignored
+        so v2 can extend the schema without breaking v1 clients. The
+        reserved `overrides` key is the concrete example.
+      operationId: checkText
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckRequest'
+            examples:
+              minimal:
+                summary: Minimal request — defaults everywhere.
+                value:
+                  text: "some user input"
+              full:
+                summary: Pinned languages and explicit mode.
+                value:
+                  text: "some user input"
+                  langs: ["en", "ja"]
+                  mode: "strict"
+      responses:
+        '200':
+          description: Successful scan.
+          headers:
+            X-List-Version:
+              $ref: '#/components/headers/XListVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckResponse'
+              examples:
+                hit:
+                  value:
+                    banned: true
+                    mode_used: { en: strict, ja: substring }
+                    matches:
+                      - lang: en
+                        term: "idiot"
+                        matched_text: "Ｉｄｉｏｔ"
+                        start: 12
+                        end: 27
+                    truncated: false
+                clean:
+                  value:
+                    banned: false
+                    mode_used: { en: strict }
+                    matches: []
+                    truncated: false
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '500':
+          $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/Overloaded'
+
+  /v1/languages:
+    get:
+      tags: [metadata]
+      summary: List loaded languages and their default modes.
+      description: |
+        Returns every language compiled into this binary (optionally
+        filtered by `VV_LANGS`) in alphabetical order by ISO code. This is
+        the canonical concatenation order `/v1/check` uses when `langs` is
+        omitted.
+      operationId: listLanguages
+      responses:
+        '200':
+          description: Language catalog.
+          headers:
+            X-List-Version:
+              $ref: '#/components/headers/XListVersion'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LanguagesResponse'
+              examples:
+                default:
+                  value:
+                    languages:
+                      - { code: de, default_mode: strict }
+                      - { code: en, default_mode: strict }
+                      - { code: ja, default_mode: substring }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /healthz:
+    get:
+      tags: [ops]
+      summary: Liveness probe.
+      description: |
+        Returns 200 once the HTTP listener is bound. Unauthenticated so
+        Kubernetes probes work without key provisioning; reachable only
+        from the pod network in the documented deployment.
+      operationId: healthz
+      security: []
+      responses:
+        '200':
+          description: Process is alive.
+
+  /readyz:
+    get:
+      tags: [ops]
+      summary: Readiness probe.
+      description: |
+        Returns 200 once all Aho-Corasick automatons are built. Returns
+        503 during the startup window — observable only by a sidecar that
+        races startup, since the listener binds after automatons finish
+        loading. Unauthenticated.
+      operationId: readyz
+      security: []
+      responses:
+        '200':
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+              examples:
+                ready:
+                  value:
+                    ready: true
+                    list_version: "5faf2ba1f5f1f0f7a7b8c9d0e1f2a3b4c5d6e7f8"
+                    languages: 12
+        '503':
+          description: Not ready (startup window).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotReadyResponse'
+              examples:
+                starting:
+                  value: { ready: false }
+
+  /metrics:
+    get:
+      tags: [ops]
+      summary: Prometheus metrics.
+      description: |
+        Prometheus text-format scrape endpoint. Unauthenticated; should be
+        reachable only from the cluster/pod network.
+
+        Series exposed: `vv_requests_total`, `vv_auth_failures_total`,
+        `vv_request_duration_seconds`, `vv_match_duration_seconds`,
+        `vv_matches_per_request`, `vv_truncated_total`, `vv_input_bytes`,
+        `vv_list_version_info`, `vv_languages_loaded`, `vv_inflight`.
+      operationId: metrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus-formatted metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        API key presented as `Authorization: Bearer <key>`. Keys are
+        compared via `subtle::ConstantTimeEq` against the full configured
+        `VV_API_KEYS` set; the loop does not short-circuit. The service
+        refuses to start with no keys configured — there is no anonymous
+        mode. `/healthz`, `/readyz`, and `/metrics` are intentionally
+        unauthenticated for probes and scrapers.
+
+  headers:
+    XListVersion:
+      description: |
+        LDNOOBW commit SHA this binary was built against. Constant per
+        process; present on every `/v1/*` response including the 401 fast
+        path and 5xx errors.
+      schema:
+        type: string
+      example: "5faf2ba1f5f1f0f7a7b8c9d0e1f2a3b4c5d6e7f8"
+
+  schemas:
+    CheckRequest:
+      type: object
+      required: [text]
+      additionalProperties: true
+      description: |
+        Unknown top-level fields are silently accepted and ignored. The
+        `overrides` key is reserved for v2 per-tenant allow/denylists.
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: |
+            Text to scan. Must be byte-length >= 1 (whitespace-only is
+            accepted; the emptiness check runs on the raw input before
+            normalization). Raw request body is capped at 64 KiB; the
+            NFKC-normalized form must not exceed 192 KiB.
+        langs:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/LanguageCode'
+          description: |
+            Languages to scan. Omit to scan every loaded language. An
+            empty array is rejected with 422 `empty_langs` — the "all" vs
+            "none" distinction is deliberately explicit.
+        mode:
+          $ref: '#/components/schemas/Mode'
+
+    CheckResponse:
+      type: object
+      required: [banned, mode_used, matches, truncated]
+      properties:
+        banned:
+          type: boolean
+        mode_used:
+          type: object
+          description: |
+            Map from each requested (or defaulted) language code to the
+            mode actually applied. Populated on every 200 response with
+            an entry for every scanned language; absent from error
+            responses.
+          additionalProperties:
+            $ref: '#/components/schemas/Mode'
+        matches:
+          type: array
+          maxItems: 256
+          items:
+            $ref: '#/components/schemas/Match'
+          description: |
+            Leftmost-longest, non-overlapping matches within each
+            language, concatenated per-language in the order `langs` was
+            supplied (or alphabetical by ISO code when `langs` is
+            omitted). Capped at the first 256; see `truncated`.
+        truncated:
+          type: boolean
+          description: |
+            True iff the full match list was strictly longer than 256 and
+            the response is a prefix.
+
+    Match:
+      type: object
+      required: [lang, term, matched_text, start, end]
+      properties:
+        lang:
+          $ref: '#/components/schemas/LanguageCode'
+        term:
+          type: string
+          description: |
+            Canonical dictionary entry from LDNOOBW. Stable across
+            requests; useful for grouping, metrics, and deduplication.
+        matched_text:
+          type: string
+          description: |
+            Exact slice of the caller's original input at
+            `text[start:end]`. May differ from `term` after NFKC and case
+            folding (e.g. `term: "idiot"`, `matched_text: "Ｉｄｉｏｔ"`).
+        start:
+          type: integer
+          minimum: 0
+          description: |
+            Inclusive byte offset into the original input. Always on a
+            UTF-8 codepoint boundary. Conservatively widened across NFKC
+            expansions so `text[start:end]` always contains the offending
+            content in full.
+        end:
+          type: integer
+          minimum: 0
+          description: |
+            Exclusive byte offset into the original input. Always on a
+            UTF-8 codepoint boundary.
+
+    LanguagesResponse:
+      type: object
+      required: [languages]
+      properties:
+        languages:
+          type: array
+          items:
+            type: object
+            required: [code, default_mode]
+            properties:
+              code:
+                $ref: '#/components/schemas/LanguageCode'
+              default_mode:
+                $ref: '#/components/schemas/Mode'
+
+    ReadyResponse:
+      type: object
+      required: [ready, list_version, languages]
+      properties:
+        ready:
+          type: boolean
+          const: true
+        list_version:
+          type: string
+          description: LDNOOBW commit SHA the binary was built against.
+        languages:
+          type: integer
+          minimum: 0
+          description: Count of automatons loaded.
+
+    NotReadyResponse:
+      type: object
+      required: [ready]
+      properties:
+        ready:
+          type: boolean
+          const: false
+
+    LanguageCode:
+      type: string
+      description: |
+        Lowercase ASCII language code (ISO 639-1 where available, e.g.
+        `en`, `ja`). Inputs are case-folded before lookup, so `"EN"` and
+        `"en"` are equivalent.
+      example: en
+
+    Mode:
+      type: string
+      enum: [strict, substring]
+      description: |
+        `strict` requires UAX #29 word boundaries on both edges of the
+        match. `substring` accepts any Aho-Corasick hit. When omitted,
+        the per-language default applies.
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: |
+            Stable machine-readable code. Values in v1:
+            `bad_request`, `unauthorized`, `payload_too_large`,
+            `invalid_mode`, `unknown_language`, `empty_text`,
+            `empty_langs`, `internal`, `overloaded`.
+          enum:
+            - bad_request
+            - unauthorized
+            - payload_too_large
+            - invalid_mode
+            - unknown_language
+            - empty_text
+            - empty_langs
+            - internal
+            - overloaded
+        message:
+          type: string
+          description: |
+            Short human-readable description. For `internal`, a fixed
+            string — diagnostic detail goes to structured logs, never
+            the response body.
+
+  responses:
+    BadRequest:
+      description: |
+        Malformed JSON or the `text` field is entirely missing.
+      headers:
+        X-List-Version:
+          $ref: '#/components/headers/XListVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            bad_request:
+              value: { error: bad_request, message: "invalid JSON body" }
+
+    Unauthorized:
+      description: |
+        Missing `Authorization` header or key not in `VV_API_KEYS`.
+        Rejected before body parse and before the in-flight gate.
+      headers:
+        X-List-Version:
+          $ref: '#/components/headers/XListVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            unauthorized:
+              value:
+                error: unauthorized
+                message: "missing or invalid API key"
+
+    PayloadTooLarge:
+      description: |
+        Raw body exceeds 64 KiB, or the NFKC-normalized form of `text`
+        exceeds 192 KiB.
+      headers:
+        X-List-Version:
+          $ref: '#/components/headers/XListVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            payload_too_large:
+              value:
+                error: payload_too_large
+                message: "request body exceeds 64 KiB"
+
+    UnprocessableEntity:
+      description: |
+        Well-formed request that violates a field-level rule. `error` is
+        one of `invalid_mode`, `unknown_language`, `empty_text`,
+        `empty_langs`.
+      headers:
+        X-List-Version:
+          $ref: '#/components/headers/XListVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            invalid_mode:
+              value:
+                error: invalid_mode
+                message: "mode must be 'strict' or 'substring'"
+            unknown_language:
+              value:
+                error: unknown_language
+                message: "language 'xx' is not loaded"
+            empty_text:
+              value:
+                error: empty_text
+                message: "text must be non-empty"
+            empty_langs:
+              value:
+                error: empty_langs
+                message: "langs must be non-empty when present; omit to scan all"
+
+    InternalError:
+      description: |
+        Unexpected server error. Diagnostic detail is emitted to
+        structured logs; the response body carries only a short fixed
+        string.
+      headers:
+        X-List-Version:
+          $ref: '#/components/headers/XListVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            internal:
+              value: { error: internal, message: "internal error" }
+
+    Overloaded:
+      description: |
+        In-flight `/v1/check` count is at `VV_MAX_INFLIGHT`. Backpressure
+        signal; retry with jitter.
+      headers:
+        X-List-Version:
+          $ref: '#/components/headers/XListVersion'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            overloaded:
+              value:
+                error: overloaded
+                message: "service at capacity, retry with jitter"
