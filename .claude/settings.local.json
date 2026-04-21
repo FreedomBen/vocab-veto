@@ -37,7 +37,9 @@
       "Bash(rustup target *)",
       "Bash(ldd ./target/x86_64-unknown-linux-musl/release/vv)",
       "Bash(./target/x86_64-unknown-linux-musl/release/vv check *)",
-      "Bash(podman --version)"
+      "Bash(podman --version)",
+      "Bash(podman images *)",
+      "Bash(git -c commit.gpgsign=false commit -m \"Add OpenAPI 3.1 spec derived from DESIGN.md\" --only openapi.yaml)"
     ]
   }
 }
