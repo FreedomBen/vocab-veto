@@ -30,7 +30,10 @@
       "Bash(./scripts/load-test.sh)",
       "Bash(oha --help)",
       "Bash(podman ps *)",
-      "Bash(./scripts/load-test.sh 30s 1 18080)"
+      "Bash(./scripts/load-test.sh 30s 1 18080)",
+      "Bash(./target/release/vv --help)",
+      "Bash(./target/release/vv check *)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }
