@@ -96,6 +96,21 @@ paths:
                     mode_used: { en: strict }
                     matches: []
                     truncated: false
+                truncated:
+                  summary: |
+                    More than 256 matches were found; the response is a
+                    strict prefix of the full list in the documented
+                    concatenation order.
+                  value:
+                    banned: true
+                    mode_used: { en: strict }
+                    matches:
+                      - lang: en
+                        term: "idiot"
+                        matched_text: "idiot"
+                        start: 0
+                        end: 5
+                    truncated: true
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -138,6 +153,8 @@ paths:
                       - { code: ja, default_mode: substring }
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
 
   /healthz:
     get:
@@ -203,11 +220,25 @@ paths:
       security: []
       responses:
         '200':
-          description: Prometheus-formatted metrics.
+          description: |
+            Prometheus-formatted metrics. Content-Type is
+            `text/plain; version=0.0.4` (Prometheus exposition format).
+          content:
+            text/plain; version=0.0.4:
+              schema:
+                type: string
+        '503':
+          description: |
+            Metrics recorder not installed. Only reachable in embedded or
+            test configurations that build the router without calling
+            `observability::install_recorder`; production binaries install
+            the recorder at startup, so this status does not occur on a
+            normally deployed pod.
           content:
             text/plain:
               schema:
                 type: string
+              example: "metrics recorder not installed\n"
 
 components:
   securitySchemes:
@@ -243,12 +274,13 @@ components:
       properties:
         text:
           type: string
-          minLength: 1
           description: |
-            Text to scan. Must be byte-length >= 1 (whitespace-only is
+            Text to scan. Must be **byte-length** >= 1 — whitespace-only is
             accepted; the emptiness check runs on the raw input before
-            normalization). Raw request body is capped at 64 KiB; the
-            NFKC-normalized form must not exceed 192 KiB.
+            normalization. Not constrained via JSON Schema `minLength`
+            because that counts characters, not bytes. Raw request body is
+            capped at 64 KiB; the NFKC-normalized form must not exceed
+            192 KiB.
         langs:
           type: array
           minItems: 1
@@ -364,10 +396,12 @@ components:
 
     LanguageCode:
       type: string
+      pattern: '^[A-Za-z]{2,3}$'
       description: |
-        Lowercase ASCII language code (ISO 639-1 where available, e.g.
-        `en`, `ja`). Inputs are case-folded before lookup, so `"EN"` and
-        `"en"` are equivalent.
+        ASCII language code (ISO 639-1 where available, e.g. `en`, `ja`).
+        Inputs are case-folded before lookup, so `"EN"` and `"en"` are
+        equivalent; codes emitted by the server (e.g. in `/v1/languages`
+        and `mode_used`) are always lowercase.
       example: en
 
     Mode:
@@ -428,6 +462,14 @@ components:
       headers:
         X-List-Version:
           $ref: '#/components/headers/XListVersion'
+        WWW-Authenticate:
+          description: |
+            Bearer-scheme challenge per RFC 6750 §3. Constant across
+            responses; no `realm`, `scope`, or `error` parameters are
+            emitted — the `{error, message}` body carries that detail.
+          schema:
+            type: string
+          example: Bearer
       content:
         application/json:
           schema:
@@ -436,12 +478,14 @@ components:
             unauthorized:
               value:
                 error: unauthorized
-                message: "missing or invalid API key"
+                message: "authentication required"
 
     PayloadTooLarge:
       description: |
         Raw body exceeds 64 KiB, or the NFKC-normalized form of `text`
-        exceeds 192 KiB.
+        exceeds 192 KiB. Both cases share the same `error` code and a
+        generic message; the triggering limit is not distinguished in the
+        response body (structured logs record which one fired).
       headers:
         X-List-Version:
           $ref: '#/components/headers/XListVersion'
@@ -450,10 +494,19 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
           examples:
-            payload_too_large:
+            raw_too_large:
+              summary: Raw request body exceeds 64 KiB.
               value:
                 error: payload_too_large
-                message: "request body exceeds 64 KiB"
+                message: "request body exceeds limit"
+            normalized_too_large:
+              summary: |
+                NFKC-normalized form of `text` exceeds 192 KiB. Fires on
+                inputs whose Unicode compatibility expansion grows beyond
+                the normalized cap even when the raw body fits.
+              value:
+                error: payload_too_large
+                message: "request body exceeds limit"
 
     UnprocessableEntity:
       description: |
@@ -471,11 +524,11 @@ components:
             invalid_mode:
               value:
                 error: invalid_mode
-                message: "mode must be 'strict' or 'substring'"
+                message: 'mode must be "strict" or "substring"'
             unknown_language:
               value:
                 error: unknown_language
-                message: "language 'xx' is not loaded"
+                message: "unknown language: xx"
             empty_text:
               value:
                 error: empty_text
@@ -483,7 +536,7 @@ components:
             empty_langs:
               value:
                 error: empty_langs
-                message: "langs must be non-empty when present; omit to scan all"
+                message: "langs must be non-empty when provided"
 
     InternalError:
       description: |
@@ -499,7 +552,7 @@ components:
             $ref: '#/components/schemas/Error'
           examples:
             internal:
-              value: { error: internal, message: "internal error" }
+              value: { error: internal, message: "internal server error" }
 
     Overloaded:
       description: |
@@ -516,4 +569,4 @@ components:
             overloaded:
               value:
                 error: overloaded
-                message: "service at capacity, retry with jitter"
+                message: "too many in-flight requests"

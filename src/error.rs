@@ -1,7 +1,7 @@
 //! Single `ApiError` enum covering every row of DESIGN §API error table.
 //! `IntoResponse` produces `{error, message}` with the right status.
 
-use axum::http::StatusCode;
+use axum::http::{header::WWW_AUTHENTICATE, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Serialize;
@@ -95,7 +95,13 @@ impl IntoResponse for ApiError {
             error: code,
             message: &msg,
         };
-        (status, Json(body)).into_response()
+        let mut resp = (status, Json(body)).into_response();
+        if status == StatusCode::UNAUTHORIZED {
+            // RFC 6750 §3: bearer-scheme responses SHOULD carry a challenge.
+            resp.headers_mut()
+                .insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        }
+        resp
     }
 }
 
@@ -126,5 +132,18 @@ mod tests {
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert_eq!(body["error"], "unknown_language");
         assert!(body["message"].as_str().unwrap().contains("xx"));
+    }
+
+    #[tokio::test]
+    async fn unauthorized_sets_www_authenticate() {
+        let resp = ApiError::Unauthorized(UnauthorizedReason::Missing).into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(resp.headers().get(WWW_AUTHENTICATE).unwrap(), "Bearer");
+    }
+
+    #[tokio::test]
+    async fn non_401_omits_www_authenticate() {
+        let resp = ApiError::Internal.into_response();
+        assert!(resp.headers().get(WWW_AUTHENTICATE).is_none());
     }
 }

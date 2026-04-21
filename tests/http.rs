@@ -111,6 +111,14 @@ async fn auth_missing_returns_401_with_x_list_version() {
             .unwrap(),
         LIST_VERSION
     );
+    assert_eq!(
+        resp.headers()
+            .get("www-authenticate")
+            .expect("www-authenticate challenge attached on 401")
+            .to_str()
+            .unwrap(),
+        "Bearer"
+    );
     let body = json_body(resp).await;
     assert_eq!(body["error"], "unauthorized");
 }
@@ -144,6 +152,14 @@ async fn v1_languages_requires_auth() {
             .to_str()
             .unwrap(),
         LIST_VERSION
+    );
+    assert_eq!(
+        resp.headers()
+            .get("www-authenticate")
+            .expect("www-authenticate challenge attached on /v1/languages 401")
+            .to_str()
+            .unwrap(),
+        "Bearer"
     );
 }
 
