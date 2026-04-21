@@ -11,7 +11,7 @@
 
 services:
   banned-words-service:
-    image: banned-words-service:${IMAGE_TAG:-latest}
+    image: vocab-veto:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: deploy/Containerfile
