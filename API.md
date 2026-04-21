@@ -40,7 +40,7 @@ Authorization: Bearer <api-key>
 | ----------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `X-List-Version`  | Every `/v1/*` response (including 401 and 5xx)                 | LDNOOBW commit SHA this binary was built against. Constant per process.                                                      |
 | `WWW-Authenticate`| 401 responses                                                  | Constant value `Bearer`. No parameters.                                                                                      |
-| `Content-Type`    | JSON responses / `/metrics`                                    | `application/json` for `/v1/*` and `/readyz`; `text/plain; version=0.0.4` for `/metrics`.                                    |
+| `Content-Type`    | JSON responses / `/metrics`                                    | `application/json` for `/v1/*` and `/readyz`; `text/plain; version=0.0.4` for `/metrics` (503 path uses bare `text/plain`). |
 
 ## Endpoints
 
