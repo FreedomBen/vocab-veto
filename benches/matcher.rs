@@ -55,10 +55,7 @@ fn corpus_norm_heavy() -> String {
 // --- engine builders ------------------------------------------------------
 
 fn engine_en() -> Engine {
-    let patterns: &[&str] = TERMS
-        .get("en")
-        .copied()
-        .expect("en is always compiled in");
+    let patterns: &[&str] = TERMS.get("en").copied().expect("en is always compiled in");
     let mut langs: HashMap<Lang, &[&str]> = HashMap::new();
     langs.insert("en".to_string(), patterns);
     Engine::new(&langs)

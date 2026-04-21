@@ -254,11 +254,8 @@ fn run_version(args: VersionArgs) -> ExitKind {
         OutputFormat::Plain => {
             let stdout = io::stdout();
             let mut handle = stdout.lock();
-            if let Err(e) = writeln!(
-                handle,
-                "{}\t{}\t{}",
-                crate_version, LIST_VERSION, languages,
-            ) {
+            if let Err(e) = writeln!(handle, "{}\t{}\t{}", crate_version, LIST_VERSION, languages,)
+            {
                 eprintln!("failed to write output: {e}");
                 return ExitKind::Io;
             }
@@ -400,9 +397,7 @@ fn build_engine() -> Engine {
 /// Resolve the three inputs `engine.scan` needs: raw text, scan-lang
 /// order, and an optional explicit mode. Mirrors routes/check.rs's
 /// validation order so error rows match.
-fn resolve_check_inputs(
-    args: &CheckArgs,
-) -> Result<(String, Vec<Lang>, Option<Mode>), CliError> {
+fn resolve_check_inputs(args: &CheckArgs) -> Result<(String, Vec<Lang>, Option<Mode>), CliError> {
     if let Some(path) = &args.json_input {
         let bytes = read_bytes_source(path.as_path())
             .map_err(|e| CliError::Io(format!("failed to read --json-input: {e}")))?;
@@ -560,9 +555,7 @@ mod tests {
 
     #[test]
     fn check_text_and_file_conflict() {
-        assert!(
-            Cli::try_parse_from(["vv", "check", "--text", "a", "--file", "/tmp/x"]).is_err()
-        );
+        assert!(Cli::try_parse_from(["vv", "check", "--text", "a", "--file", "/tmp/x"]).is_err());
     }
 
     #[test]
@@ -572,67 +565,44 @@ mod tests {
 
     #[test]
     fn check_file_and_stdin_conflict() {
-        assert!(
-            Cli::try_parse_from(["vv", "check", "--file", "/tmp/x", "--stdin"]).is_err()
-        );
+        assert!(Cli::try_parse_from(["vv", "check", "--file", "/tmp/x", "--stdin"]).is_err());
     }
 
     #[test]
     fn json_input_conflicts_with_text() {
-        assert!(Cli::try_parse_from([
-            "vv", "check", "--json-input", "/tmp/x", "--text", "a",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from(["vv", "check", "--json-input", "/tmp/x", "--text", "a",]).is_err()
+        );
     }
 
     #[test]
     fn json_input_conflicts_with_file() {
-        assert!(Cli::try_parse_from([
-            "vv",
-            "check",
-            "--json-input",
-            "/tmp/x",
-            "--file",
-            "/tmp/y",
-        ])
+        assert!(Cli::try_parse_from(
+            ["vv", "check", "--json-input", "/tmp/x", "--file", "/tmp/y",]
+        )
         .is_err());
     }
 
     #[test]
     fn json_input_conflicts_with_stdin() {
-        assert!(Cli::try_parse_from([
-            "vv",
-            "check",
-            "--json-input",
-            "/tmp/x",
-            "--stdin",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from(["vv", "check", "--json-input", "/tmp/x", "--stdin",]).is_err()
+        );
     }
 
     #[test]
     fn json_input_conflicts_with_lang() {
-        assert!(Cli::try_parse_from([
-            "vv",
-            "check",
-            "--json-input",
-            "/tmp/x",
-            "--lang",
-            "en",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from(["vv", "check", "--json-input", "/tmp/x", "--lang", "en",])
+                .is_err()
+        );
     }
 
     #[test]
     fn json_input_conflicts_with_mode() {
-        assert!(Cli::try_parse_from([
-            "vv",
-            "check",
-            "--json-input",
-            "/tmp/x",
-            "--mode",
-            "strict",
-        ])
+        assert!(Cli::try_parse_from(
+            ["vv", "check", "--json-input", "/tmp/x", "--mode", "strict",]
+        )
         .is_err());
     }
 

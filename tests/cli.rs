@@ -85,13 +85,7 @@ fn explicit_strict_on_cjk_is_honored_not_clamped() {
     // and mode_used echoes "strict" — the audit trail the plan mandates.
     let out = vv()
         .args([
-            "check",
-            "--text",
-            "hello",
-            "--lang",
-            "zh",
-            "--mode",
-            "strict",
+            "check", "--text", "hello", "--lang", "zh", "--mode", "strict",
         ])
         .output()
         .unwrap();
@@ -102,7 +96,8 @@ fn explicit_strict_on_cjk_is_honored_not_clamped() {
 
 #[test]
 fn json_input_silently_ignores_overrides_and_unknown_fields() {
-    let body = r#"{"text":"hello","langs":["en"],"overrides":{"allowlist":["x"]},"future_field":42}"#;
+    let body =
+        r#"{"text":"hello","langs":["en"],"overrides":{"allowlist":["x"]},"future_field":42}"#;
     let out = vv()
         .args(["check", "--json-input", "-"])
         .write_stdin(body)
@@ -226,12 +221,7 @@ fn payload_too_large_exits_three() {
         .write_stdin(big)
         .output()
         .unwrap();
-    assert_eq!(
-        out.status.code(),
-        Some(3),
-        "stderr: {}",
-        stderr_str(&out),
-    );
+    assert_eq!(out.status.code(), Some(3), "stderr: {}", stderr_str(&out),);
 }
 
 #[test]
@@ -317,7 +307,10 @@ fn languages_plain_output_is_tsv_per_language() {
 
 #[test]
 fn version_plain_output_is_single_tsv_row() {
-    let out = vv().args(["version", "--output", "plain"]).output().unwrap();
+    let out = vv()
+        .args(["version", "--output", "plain"])
+        .output()
+        .unwrap();
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8_lossy(&out.stdout);
     let rows: Vec<&str> = stdout.lines().collect();
@@ -332,19 +325,14 @@ fn version_plain_output_is_single_tsv_row() {
 #[test]
 fn verbose_emits_diagnostics_to_stderr_only() {
     let out = vv()
-        .args([
-            "check", "--text", "hello world", "--lang", "en", "-v",
-        ])
+        .args(["check", "--text", "hello world", "--lang", "en", "-v"])
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr_str(&out));
     // stdout stays JSON-parsable regardless of verbosity.
     let _: Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
     let stderr = stderr_str(&out);
-    assert!(
-        stderr.contains("vv: input_bytes=11"),
-        "stderr: {stderr}",
-    );
+    assert!(stderr.contains("vv: input_bytes=11"), "stderr: {stderr}",);
     assert!(stderr.contains("vv: en matches=0"), "stderr: {stderr}");
 }
 

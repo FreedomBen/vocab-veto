@@ -33,7 +33,10 @@
       "Bash(./scripts/load-test.sh 30s 1 18080)",
       "Bash(./target/release/vv --help)",
       "Bash(./target/release/vv check *)",
-      "Bash(echo \"exit=$?\")"
+      "Bash(echo \"exit=$?\")",
+      "Bash(rustup target *)",
+      "Bash(ldd ./target/x86_64-unknown-linux-musl/release/vv)",
+      "Bash(./target/x86_64-unknown-linux-musl/release/vv check *)"
     ]
   }
 }
