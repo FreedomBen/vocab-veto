@@ -35,14 +35,52 @@ All common tasks run through the top-level `Makefile`:
 | Target               | What it does                                                                                                            |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `make help`          | List targets (default).                                                                                                 |
-| `make build`         | `cargo build --release --locked`.                                                                                       |
-| `make test`          | `cargo test --locked` (unit + integration).                                                                             |
+| `make build`         | `cargo build --release --locked` (server binary).                                                                       |
+| `make vv`            | Build the `vv` CLI binary (`cargo build --release --bin vv --locked`).                                                  |
+| `make vv-static`     | Static musl build of `vv` for x86_64 Linux (see `make help` for the one-shot host setup).                               |
+| `make install`       | Install `banned-words-service` and `vv` to `$(PREFIX)/bin` (default `/usr/local/bin`; respects `DESTDIR`).              |
+| `make test`          | `cargo test --locked` (unit + integration, including the `vv` CLI suite).                                                |
 | `make bench`         | `cargo bench --no-run --locked` (compile-check the criterion suite).                                                    |
 | `make lint`          | `cargo fmt --check` + `cargo clippy -- -D warnings`.                                                                    |
 | `make podman`        | Build the distroless container image via rootless podman; override with `CONTAINER=docker`. Tagged with the LDNOOBW SHA. |
-| `make run`           | Run locally with a dev-only `VV_API_KEYS`.                                                                             |
+| `make run`           | Run the server locally with a dev-only `VV_API_KEYS`.                                                                   |
 | `make install-tools` | Install pinned dev tools (`oha` for load tests).                                                                        |
 | `make release-check` | Pre-tag gate: `lint` + `test` + `bench` + `podman`. See [RELEASE.md](./RELEASE.md) for the rest of the release flow.    |
+
+## CLI usage
+
+`vv` is a command-line frontend to the same matcher the HTTP service
+runs. It is a single static binary that scans text offline — no running
+service, no network, no runtime configuration. Because it links the
+same library crate, `vv` and the server agree byte-for-byte on the
+list version, the per-language default mode, and match spans.
+
+```sh
+# Inline text — Scunthorpe is a classic false positive that strict
+# (default for en) correctly lets through.
+vv check --text "Scunthorpe" --lang en
+
+# Stdin piping across multiple languages
+echo "hello world" | vv check --lang en,de
+
+# A full CheckRequest body (same shape the server accepts)
+echo '{"text":"hello","langs":["en"]}' | vv check --json-input -
+
+# Introspection
+vv languages
+vv version
+```
+
+Exit codes make `vv check` scriptable as a pre-commit hook without
+parsing JSON: `0` clean, `1` one or more matches (or truncated), `2`
+usage / input-validation error, `3` input exceeds the normalization
+cap, `64` I/O error. `vv check --help` carries the full table.
+
+The CLI is feature-parity with `/v1/check` and `/v1/languages` except
+for the rails that only make sense over HTTP — bearer auth, Prometheus
+metrics, and the concurrency gate. See
+[CLI_IMPLEMENTATION_PLAN.md](./CLI_IMPLEMENTATION_PLAN.md) for the full
+mirror table and implementation milestones.
 
 ## Configuration
 

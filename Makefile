@@ -26,16 +26,31 @@ DEV_API_KEY ?= dev-key-do-not-use-in-production-0000000000000000
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test bench lint podman run release-check install-tools
+.PHONY: help build test bench lint podman run release-check install-tools vv vv-static install
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*?## "; print "Vocab Veto — make targets\n"} \
 	      /^[a-zA-Z_-]+:.*?## / {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "  CONTAINER=$(CONTAINER) (override with CONTAINER=docker)"
+	@echo "  PREFIX=$(PREFIX) (override with PREFIX=/path for make install)"
+	@echo ""
+	@echo "  One-shot setup for vv-static: rustup target add x86_64-unknown-linux-musl"
+	@echo "    plus a musl linker — 'musl-tools' on Debian/Ubuntu, 'musl-gcc' on Fedora."
 
-build: ## Build the release binary (cargo build --release --locked)
+build: ## Build the release server binary (cargo build --release --locked)
 	$(CARGO) build --release --locked
+
+vv: ## Build the release vv CLI binary (cargo build --release --bin vv --locked)
+	$(CARGO) build --release --bin vv --locked
+
+vv-static: ## Build a static musl vv for x86_64 Linux (see make help for host setup)
+	$(CARGO) build --release --bin vv --locked --target x86_64-unknown-linux-musl
+
+install: build vv ## Install banned-words-service and vv to $(PREFIX)/bin (default /usr/local/bin)
+	install -d "$(DESTDIR)$(PREFIX)/bin"
+	install -m 0755 target/release/banned-words-service "$(DESTDIR)$(PREFIX)/bin/banned-words-service"
+	install -m 0755 target/release/vv "$(DESTDIR)$(PREFIX)/bin/vv"
 
 test: ## Run the full test suite (cargo test --locked)
 	$(CARGO) test --locked

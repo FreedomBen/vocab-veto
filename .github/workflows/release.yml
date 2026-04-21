@@ -1,0 +1,109 @@
+name: Release
+
+# Triggered on v-prefixed tag pushes. Produces two artifacts:
+#   - `banned-words-service` container image, tagged with the release
+#     tag and the LDNOOBW submodule SHA; pushed to GHCR.
+#   - `vv` static musl binary for x86_64 Linux, uploaded as a GitHub
+#     release asset on the same tag.
+#
+# See CLI_IMPLEMENTATION_PLAN.md §CM5 item 4 and RELEASE.md for the
+# human-facing procedure this automates.
+
+on:
+  push:
+    tags: ['v*']
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server-image:
+    name: Build and push server image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Read LDNOOBW SHA
+        id: list
+        run: echo "sha=$(git -C vendor/ldnoobw rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Containerfile
+          push: true
+          build-args: |
+            LIST_VERSION=${{ steps.list.outputs.sha }}
+            REVISION=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository }}:${{ steps.list.outputs.sha }}
+
+  vv-static:
+    name: Build static vv binary + attach to release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install musl linker
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Install Rust toolchain + musl target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build static vv via make
+        run: make vv-static
+
+      - name: Verify static linkage
+        run: |
+          # `ldd` phrasing depends on the host's libc: glibc typically
+          # prints "not a dynamic executable"; some distros print
+          # "statically linked" instead. Accept either.
+          out="$(ldd ./target/x86_64-unknown-linux-musl/release/vv 2>&1 || true)"
+          if echo "${out}" | grep -E -q 'not a dynamic executable|statically linked'; then
+            echo "ok: vv is statically linked"
+          else
+            echo "ERROR: vv is not statically linked:" >&2
+            echo "${out}" >&2
+            exit 1
+          fi
+
+      - name: Smoke test the static binary
+        run: |
+          ./target/x86_64-unknown-linux-musl/release/vv check --text "hello" --lang en
+          ./target/x86_64-unknown-linux-musl/release/vv version
+
+      - name: Rename for release asset
+        run: |
+          cp ./target/x86_64-unknown-linux-musl/release/vv \
+             "./vv-${GITHUB_REF_NAME}-x86_64-unknown-linux-musl"
+
+      - name: Attach to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vv-${{ github.ref_name }}-x86_64-unknown-linux-musl
+          fail_on_unmatched_files: true

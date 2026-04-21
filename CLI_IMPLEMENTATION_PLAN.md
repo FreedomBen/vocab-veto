@@ -76,7 +76,7 @@ path, no second way for the two binaries to disagree.
 - [x] **CM4 — Input variants, output formats, error rails.** stdin and
   file input for `check`; `--output plain` and `--output json`; one exit
   code per server error row, documented in the CLI help.
-- [ ] **CM5 — Static musl binary, CI, docs.** `make vv` and
+- [x] **CM5 — Static musl binary, CI, docs.** `make vv` and
   `make vv-static` targets; CI builds and smoke-tests the CLI binary;
   README gets a `## CLI usage` section; `make install` installs both
   binaries by default.

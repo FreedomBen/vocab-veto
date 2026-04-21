@@ -39,6 +39,29 @@ jobs:
       - name: cargo bench --no-run
         run: cargo bench --no-run --locked
 
+  cli:
+    name: vv CLI build + test + smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build vv release binary
+        run: cargo build --release --bin vv --locked
+
+      - name: cargo test --test cli
+        run: cargo test --test cli --locked
+
+      - name: Smoke test — clean input exits 0
+        run: ./target/release/vv check --text "hello" --lang en
+
   bench-regression:
     name: Bench p99 regression gate (>10% fails)
     runs-on: ubuntu-latest
