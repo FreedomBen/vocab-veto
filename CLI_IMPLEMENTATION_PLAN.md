@@ -73,7 +73,7 @@ path, no second way for the two binaries to disagree.
   whether any matches were found.
 - [x] **CM3 — `languages` subcommand and `version` subcommand.** Read-only
   introspection endpoints the server exposes, reproduced as subcommands.
-- [ ] **CM4 — Input variants, output formats, error rails.** stdin and
+- [x] **CM4 — Input variants, output formats, error rails.** stdin and
   file input for `check`; `--output plain` and `--output json`; one exit
   code per server error row, documented in the CLI help.
 - [ ] **CM5 — Static musl binary, CI, docs.** `make vv` and

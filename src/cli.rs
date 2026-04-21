@@ -36,11 +36,25 @@ pub enum Command {
     Version(VersionArgs),
 }
 
+/// Exit-code table surfaced in `vv check --help` via `after_help` below.
+/// Keep in sync with `ExitKind::code` and CLI_IMPLEMENTATION_PLAN §CM4.
+const CHECK_AFTER_HELP: &str = "\
+Exit codes:
+  0   success, no matches found
+  1   success, one or more matches found (or truncated at 256)
+  2   usage error / malformed input (unknown language, invalid mode,
+      empty text, empty langs, malformed --json-input)
+  3   input exceeds the normalization cap (post-NFKC > 192 KiB)
+  64  I/O error (file unreadable, stdin closed early, non-UTF-8 raw text)
+  70  internal error (a caught panic; should not happen)
+";
+
 /// Flag surface for `vv check`. Mutex rails are enforced by clap before
 /// dispatch: `--text` / `--file` / `--stdin` are pairwise exclusive, and
 /// `--json-input` excludes all three plus `--lang` / `--mode` (the JSON
 /// body carries the equivalent fields).
 #[derive(Args, Debug)]
+#[command(after_help = CHECK_AFTER_HELP)]
 pub struct CheckArgs {
     /// Inline text to scan.
     #[arg(long, conflicts_with_all = ["file", "stdin", "json_input"])]
@@ -96,21 +110,50 @@ pub enum OutputFormat {
     Plain,
 }
 
-/// Internal error categories mapped to exit codes in `run_check`. The
-/// message is emitted on stderr verbatim; exit codes follow the table in
-/// CLI_IMPLEMENTATION_PLAN.md §CM4.
+/// Internal error categories surfaced by input-resolution helpers.
+/// `run_check` maps them to the appropriate `ExitKind`.
 #[derive(Debug)]
 enum CliError {
-    /// Invalid usage, malformed JSON, invalid mode, unknown language,
-    /// empty text, empty langs — all collapsed to exit 2.
     Usage(String),
-    /// File unreadable, stdin closed early, raw-text input not valid
-    /// UTF-8. Exit 64.
     Io(String),
 }
 
-/// Entry point for `src/bin/vv.rs`. Returns the process exit code.
+/// Public exit-category enum. Kept separate from `ExitCode` so
+/// `run_inner` is unit-testable — `ExitCode` is opaque and unequatable
+/// on stable Rust. See CLI_IMPLEMENTATION_PLAN §CM4 for the full table.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ExitKind {
+    Success,
+    Hits,
+    Usage,
+    TooLarge,
+    Io,
+    Panic,
+}
+
+impl ExitKind {
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Success => 0,
+            Self::Hits => 1,
+            Self::Usage => 2,
+            Self::TooLarge => 3,
+            Self::Io => 64,
+            Self::Panic => 70,
+        }
+    }
+}
+
+/// Entry point for `src/bin/vv.rs`. Runs the CLI inside `catch_unwind`
+/// so an unexpected panic becomes exit 70 rather than a process abort.
 pub fn run() -> ExitCode {
+    let result = std::panic::catch_unwind(run_inner);
+    ExitCode::from(map_unwind_result(result).code())
+}
+
+/// Parse argv and dispatch. Returns the exit category; `run` translates
+/// to `ExitCode`. Extracted so unit tests can exercise the panic path.
+pub fn run_inner() -> ExitKind {
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {
@@ -118,7 +161,11 @@ pub fn run() -> ExitCode {
             // stream; follow its suggested exit code (0 for --help/--version,
             // 2 for parse errors).
             e.print().ok();
-            return ExitCode::from(if e.use_stderr() { 2 } else { 0 });
+            return if e.use_stderr() {
+                ExitKind::Usage
+            } else {
+                ExitKind::Success
+            };
         }
     };
 
@@ -129,114 +176,214 @@ pub fn run() -> ExitCode {
     }
 }
 
-fn run_languages(_args: LanguagesArgs) -> ExitCode {
+/// Fold a `catch_unwind` result into an `ExitKind`. Extracted for
+/// testability — the caller is either `run` or a unit test.
+fn map_unwind_result(r: std::thread::Result<ExitKind>) -> ExitKind {
+    match r {
+        Ok(k) => k,
+        Err(_) => {
+            eprintln!("internal error");
+            ExitKind::Panic
+        }
+    }
+}
+
+fn run_languages(args: LanguagesArgs) -> ExitKind {
     // Mirrors routes/languages.rs: alphabetical code order, per-code
     // default_mode from DEFAULT_MODE (Substring is the conservative
     // fallback for any code without an explicit entry, matching the
     // server's identical unwrap_or). Since the CLI has no runtime
     // allowlist, the compiled set is the loaded set.
-    let entries: Vec<LanguagesEntry> = compiled_langs()
-        .into_iter()
-        .map(|code| {
-            let default_mode = DEFAULT_MODE
-                .get(code)
-                .copied()
-                .unwrap_or(Mode::Substring);
-            LanguagesEntry {
-                code: code.to_string(),
-                default_mode: default_mode.as_wire_str(),
+    match args.output {
+        OutputFormat::Json => {
+            let entries: Vec<LanguagesEntry> = compiled_langs()
+                .into_iter()
+                .map(|code| LanguagesEntry {
+                    code: code.to_string(),
+                    default_mode: DEFAULT_MODE
+                        .get(code)
+                        .copied()
+                        .unwrap_or(Mode::Substring)
+                        .as_wire_str(),
+                })
+                .collect();
+            let resp = LanguagesResponse { languages: entries };
+            if let Err(e) = write_json(&resp) {
+                eprintln!("failed to write output: {e}");
+                return ExitKind::Io;
             }
-        })
-        .collect();
-
-    let resp = LanguagesResponse { languages: entries };
-    if let Err(e) = write_json(&resp) {
-        eprintln!("failed to write output: {e}");
-        return ExitCode::from(64);
+        }
+        OutputFormat::Plain => {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            for code in compiled_langs() {
+                let m = DEFAULT_MODE.get(code).copied().unwrap_or(Mode::Substring);
+                if let Err(e) = writeln!(handle, "{}\t{}", code, m.as_wire_str()) {
+                    eprintln!("failed to write output: {e}");
+                    return ExitKind::Io;
+                }
+            }
+        }
     }
-    ExitCode::SUCCESS
+    ExitKind::Success
 }
 
-fn run_version(_args: VersionArgs) -> ExitCode {
-    // Shape: /readyz minus `ready` (always true for a local binary) plus
-    // `crate_version`. See CLI_IMPLEMENTATION_PLAN.md §CM3.
-    #[derive(serde::Serialize)]
-    struct VersionResponse {
-        crate_version: &'static str,
-        list_version: &'static str,
-        languages: usize,
+fn run_version(args: VersionArgs) -> ExitKind {
+    // JSON shape: /readyz minus `ready` (always true for a local binary)
+    // plus `crate_version`. Plain form collapses to one TSV row.
+    let crate_version = env!("CARGO_PKG_VERSION");
+    let languages = TERMS.len();
+    match args.output {
+        OutputFormat::Json => {
+            #[derive(serde::Serialize)]
+            struct VersionResponse {
+                crate_version: &'static str,
+                list_version: &'static str,
+                languages: usize,
+            }
+            let resp = VersionResponse {
+                crate_version,
+                list_version: LIST_VERSION,
+                languages,
+            };
+            if let Err(e) = write_json(&resp) {
+                eprintln!("failed to write output: {e}");
+                return ExitKind::Io;
+            }
+        }
+        OutputFormat::Plain => {
+            let stdout = io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(e) = writeln!(
+                handle,
+                "{}\t{}\t{}",
+                crate_version, LIST_VERSION, languages,
+            ) {
+                eprintln!("failed to write output: {e}");
+                return ExitKind::Io;
+            }
+        }
     }
-    let resp = VersionResponse {
-        crate_version: env!("CARGO_PKG_VERSION"),
-        list_version: LIST_VERSION,
-        languages: TERMS.len(),
-    };
-    if let Err(e) = write_json(&resp) {
-        eprintln!("failed to write output: {e}");
-        return ExitCode::from(64);
-    }
-    ExitCode::SUCCESS
+    ExitKind::Success
 }
 
-fn run_check(args: CheckArgs) -> ExitCode {
+fn run_check(args: CheckArgs) -> ExitKind {
+    let verbose = args.verbose;
+    let output_format = args.output;
+
     let (text, scan_langs, mode) = match resolve_check_inputs(&args) {
         Ok(v) => v,
         Err(CliError::Usage(msg)) => {
             eprintln!("{msg}");
-            return ExitCode::from(2);
+            return ExitKind::Usage;
         }
         Err(CliError::Io(msg)) => {
             eprintln!("{msg}");
-            return ExitCode::from(64);
+            return ExitKind::Io;
         }
     };
 
-    let engine = build_engine();
+    if verbose {
+        let mode_str = mode.map(|m| m.as_wire_str()).unwrap_or("<default>");
+        eprintln!(
+            "vv: input_bytes={} langs=[{}] mode={}",
+            text.len(),
+            scan_langs.join(","),
+            mode_str,
+        );
+    }
 
+    let engine = build_engine();
     let result = match engine.scan(&text, &scan_langs, mode) {
         Ok(r) => r,
         Err(NormalizeError::TooLarge) => {
-            eprintln!("input exceeds {} bytes after normalization", crate::matcher::MAX_NORMALIZED_BYTES);
-            return ExitCode::from(3);
+            eprintln!(
+                "input exceeds {} bytes after normalization",
+                crate::matcher::MAX_NORMALIZED_BYTES,
+            );
+            return ExitKind::TooLarge;
         }
     };
 
-    let mut mode_used: BTreeMap<String, &'static str> = BTreeMap::new();
-    for (lang, m) in result.mode_used {
-        mode_used.insert(lang, m.as_wire_str());
+    if verbose {
+        // Per-lang match tallies, in the order languages were scanned.
+        let mut per_lang: Vec<(String, usize)> = result
+            .mode_used
+            .iter()
+            .map(|(lang, _)| (lang.clone(), 0))
+            .collect();
+        for m in &result.matches {
+            if let Some(entry) = per_lang.iter_mut().find(|(lang, _)| lang == &m.lang) {
+                entry.1 += 1;
+            }
+        }
+        for (lang, count) in &per_lang {
+            eprintln!("vv: {lang} matches={count}");
+        }
+        if result.truncated {
+            eprintln!("vv: truncated at {}", crate::matcher::MAX_MATCHES);
+        }
     }
 
-    let matches: Vec<MatchDto> = result
-        .matches
-        .into_iter()
-        .map(|m| MatchDto {
-            lang: m.lang,
-            term: m.term,
-            matched_text: m.matched_text,
-            start: m.start,
-            end: m.end,
-        })
-        .collect();
+    let has_hits = !result.matches.is_empty() || result.truncated;
 
-    let has_hits = !matches.is_empty() || result.truncated;
-
-    let resp = CheckResponse {
-        list_version: LIST_VERSION,
-        mode_used,
-        matches,
-        truncated: result.truncated,
+    let write_result = match output_format {
+        OutputFormat::Json => {
+            let mut mode_used: BTreeMap<String, &'static str> = BTreeMap::new();
+            for (lang, m) in result.mode_used {
+                mode_used.insert(lang, m.as_wire_str());
+            }
+            let matches: Vec<MatchDto> = result
+                .matches
+                .into_iter()
+                .map(|m| MatchDto {
+                    lang: m.lang,
+                    term: m.term,
+                    matched_text: m.matched_text,
+                    start: m.start,
+                    end: m.end,
+                })
+                .collect();
+            let resp = CheckResponse {
+                list_version: LIST_VERSION,
+                mode_used,
+                matches,
+                truncated: result.truncated,
+            };
+            write_json(&resp)
+        }
+        OutputFormat::Plain => write_check_plain(&result.matches, result.truncated),
     };
-
-    if let Err(e) = write_json(&resp) {
+    if let Err(e) = write_result {
         eprintln!("failed to write output: {e}");
-        return ExitCode::from(64);
+        return ExitKind::Io;
     }
 
     if has_hits {
-        ExitCode::from(1)
+        ExitKind::Hits
     } else {
-        ExitCode::SUCCESS
+        ExitKind::Success
     }
+}
+
+/// Plain-output writer for `vv check`. Emits one TSV row per match —
+/// `<lang>\t<start>-<end>\t<term>\t<matched_text>` — in match-concatenation
+/// order, and a `# truncated` sentinel after the row set when the scan
+/// hit the 256 cap. See CLI_IMPLEMENTATION_PLAN §CM4 item 1.
+fn write_check_plain(matches: &[crate::matcher::Match], truncated: bool) -> io::Result<()> {
+    let stdout = io::stdout();
+    let mut handle = stdout.lock();
+    for m in matches {
+        writeln!(
+            handle,
+            "{}\t{}-{}\t{}\t{}",
+            m.lang, m.start, m.end, m.term, m.matched_text,
+        )?;
+    }
+    if truncated {
+        writeln!(handle, "# truncated")?;
+    }
+    Ok(())
 }
 
 /// Build an `Engine` spanning every compiled language. The CLI has no
@@ -570,5 +717,30 @@ mod tests {
         // and is rejected as an unknown code, matching the plan.
         let err = validate_langs(&[String::new()]).unwrap_err();
         assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn exit_kind_code_matches_plan_table() {
+        assert_eq!(ExitKind::Success.code(), 0);
+        assert_eq!(ExitKind::Hits.code(), 1);
+        assert_eq!(ExitKind::Usage.code(), 2);
+        assert_eq!(ExitKind::TooLarge.code(), 3);
+        assert_eq!(ExitKind::Io.code(), 64);
+        assert_eq!(ExitKind::Panic.code(), 70);
+    }
+
+    #[test]
+    fn map_unwind_result_passthrough_on_ok() {
+        assert_eq!(map_unwind_result(Ok(ExitKind::Success)), ExitKind::Success);
+        assert_eq!(map_unwind_result(Ok(ExitKind::Hits)), ExitKind::Hits);
+    }
+
+    #[test]
+    fn map_unwind_result_converts_caught_panic_to_exit_70() {
+        // Simulates the exact path `run` takes: a `run_inner`-style
+        // closure that panics is wrapped by `catch_unwind`, and
+        // `map_unwind_result` translates the Err into `ExitKind::Panic`.
+        let caught = std::panic::catch_unwind(|| -> ExitKind { panic!("injected") });
+        assert_eq!(map_unwind_result(caught), ExitKind::Panic);
     }
 }

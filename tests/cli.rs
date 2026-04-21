@@ -233,3 +233,128 @@ fn payload_too_large_exits_three() {
         stderr_str(&out),
     );
 }
+
+#[test]
+fn nonexistent_file_exits_64_as_io_error() {
+    let out = vv()
+        .args([
+            "check",
+            "--file",
+            "/tmp/vv-test-nonexistent-file-path-xyzzy",
+            "--lang",
+            "en",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(64), "stderr: {}", stderr_str(&out));
+    assert!(stderr_str(&out).contains("failed to read --file"));
+}
+
+#[test]
+fn check_plain_output_emits_tsv_row_per_match() {
+    let out = vv()
+        .args([
+            "check",
+            "--text",
+            "fuck that",
+            "--lang",
+            "en",
+            "--output",
+            "plain",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "stderr: {}", stderr_str(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Exactly one row, TSV shape: lang\tstart-end\tterm\tmatched_text
+    let rows: Vec<&str> = stdout.lines().collect();
+    assert_eq!(rows.len(), 1, "got rows: {rows:?}");
+    let cols: Vec<&str> = rows[0].split('\t').collect();
+    assert_eq!(cols.len(), 4);
+    assert_eq!(cols[0], "en");
+    assert_eq!(cols[1], "0-4");
+    assert_eq!(cols[2], "fuck");
+    assert_eq!(cols[3], "fuck");
+}
+
+#[test]
+fn check_plain_output_is_empty_when_clean() {
+    let out = vv()
+        .args([
+            "check",
+            "--text",
+            "Scunthorpe",
+            "--lang",
+            "en",
+            "--output",
+            "plain",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr_str(&out));
+    assert_eq!(out.stdout, b"");
+}
+
+#[test]
+fn languages_plain_output_is_tsv_per_language() {
+    let out = vv()
+        .args(["languages", "--output", "plain"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let rows: Vec<&str> = stdout.lines().collect();
+    assert_eq!(rows.len(), 27);
+    for row in rows {
+        let cols: Vec<&str> = row.split('\t').collect();
+        assert_eq!(cols.len(), 2, "row: {row:?}");
+        assert!(
+            cols[1] == "strict" || cols[1] == "substring",
+            "row: {row:?}",
+        );
+    }
+}
+
+#[test]
+fn version_plain_output_is_single_tsv_row() {
+    let out = vv().args(["version", "--output", "plain"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let rows: Vec<&str> = stdout.lines().collect();
+    assert_eq!(rows.len(), 1);
+    let cols: Vec<&str> = rows[0].split('\t').collect();
+    assert_eq!(cols.len(), 3);
+    assert_eq!(cols[0], env!("CARGO_PKG_VERSION"));
+    assert_eq!(cols[1].len(), 40);
+    assert_eq!(cols[2], "27");
+}
+
+#[test]
+fn verbose_emits_diagnostics_to_stderr_only() {
+    let out = vv()
+        .args([
+            "check", "--text", "hello world", "--lang", "en", "-v",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr_str(&out));
+    // stdout stays JSON-parsable regardless of verbosity.
+    let _: Value = serde_json::from_slice(&out.stdout).expect("stdout is JSON");
+    let stderr = stderr_str(&out);
+    assert!(
+        stderr.contains("vv: input_bytes=11"),
+        "stderr: {stderr}",
+    );
+    assert!(stderr.contains("vv: en matches=0"), "stderr: {stderr}");
+}
+
+#[test]
+fn check_help_exposes_exit_code_table() {
+    let out = vv().args(["check", "--help"]).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("Exit codes:"), "stdout: {stdout}");
+    assert!(stdout.contains("no matches"));
+    assert!(stdout.contains("normalization cap"));
+    assert!(stdout.contains("I/O error"));
+}
