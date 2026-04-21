@@ -15,6 +15,7 @@ for the milestone-by-milestone status. Authoritative documents:
 | Document                                             | Purpose                                                                                       |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | [DESIGN.md](./DESIGN.md)                             | Behavior spec, API surface, error table, metrics contract, threat model, deployment posture. |
+| [API.md](./API.md)                                   | HTTP API reference derived from `openapi.yaml` — endpoints, request/response shapes, errors. |
 | [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md)   | Milestone-ordered plan with explicit exit criteria per milestone.                             |
 | [RELEASE.md](./RELEASE.md)                           | Human-owned release procedure: pre-tag gate, reproducibility check, load-test, tag and push. |
 | [CLAUDE.md](./CLAUDE.md)                             | Agent-facing working notes and cross-cutting invariants.                                      |
