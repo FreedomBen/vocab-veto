@@ -27,10 +27,11 @@ output.
 ### 2a. Server image
 
 ```bash
-make podman && podman image inspect vocab-veto:latest \
+IMG=ghcr.io/freedomben/vocab-veto
+make podman && podman image inspect "${IMG}:latest" \
     --format '{{.Digest}} {{.Config.Labels.list_version}}'
-podman image rm vocab-veto:latest vocab-veto:"$(git -C vendor/ldnoobw rev-parse HEAD)"
-make podman && podman image inspect vocab-veto:latest \
+podman image rm "${IMG}:latest" "${IMG}:$(git -C vendor/ldnoobw rev-parse HEAD)"
+make podman && podman image inspect "${IMG}:latest" \
     --format '{{.Digest}} {{.Config.Labels.list_version}}'
 ```
 

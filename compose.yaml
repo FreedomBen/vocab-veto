@@ -13,7 +13,7 @@
 
 services:
   vocab-veto:
-    image: vocab-veto:${IMAGE_TAG:-latest}
+    image: ghcr.io/freedomben/vocab-veto:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: deploy/Containerfile
